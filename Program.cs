@@ -1,0 +1,70 @@
+using CerberusBusinessService.Functions;
+using CerberusBusinessService.Models.DTO;
+using CerberusBusinessService.Models.JWT;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+// ===== JWT settings =====
+var jwtSettings = new JwtSettings();
+builder.Configuration.GetSection("JwtSettings").Bind(jwtSettings);
+builder.Services.Configure<WsOptions>(builder.Configuration.GetSection("WebServices:Abac"));
+builder.Services.AddSingleton(jwtSettings);
+// ===== Auth JWT =====
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtSettings.Issuer,
+        ValidAudience = jwtSettings.Audience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key)),
+        ClockSkew = TimeSpan.Zero
+    };
+});
+builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
+{
+    var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
+
+    http.BaseAddress = new Uri(opt.BaseUrl);
+    http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
+    http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddAuthorization();
+// Add services to the container.
+
+builder.Services.AddControllers();
+// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+//builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+app.UsePathBase("/Apis");
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
+{
+    //app.MapOpenApi();
+    app.UseDeveloperExceptionPage();
+    app.UseSwagger();
+    app.UseSwaggerUI(); // UI en /swagger
+}
+
+app.UseHttpsRedirection();
+
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
