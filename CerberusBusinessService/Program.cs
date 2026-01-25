@@ -1,3 +1,4 @@
+using CerberusBusinessService.DataSecure;
 using CerberusBusinessService.Functions;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
@@ -11,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 var jwtSettings = new JwtSettings();
 builder.Configuration.GetSection("JwtSettings").Bind(jwtSettings);
 builder.Services.Configure<WsOptions>(builder.Configuration.GetSection("WebServices:Abac"));
+builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddSingleton(jwtSettings);
 // ===== Auth JWT =====
 builder.Services.AddAuthentication(options =>

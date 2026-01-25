@@ -1,4 +1,5 @@
 ﻿using CerberusBusinessService.Functions;
+using CerberusBusinessService.Models.DTO.Empleados;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +23,23 @@ namespace CerberusBusinessService.Controllers
         public async Task<IActionResult> ListadoEmpleados(CancellationToken ct)
         {
             string tarea = "MODULO.RHH.EMPLEADOS.VER";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+
+            return Ok(new { allowed });
+        }
+
+        [HttpPost("AltaEmpleado")]
+        [Authorize]
+        public async Task<IActionResult> EltaEmpleado(EmpleadoAltaRequest data, CancellationToken ct)
+        {
+            string tarea = "MODULO.RHH.EMPLEADOS.ALTA";
             // 1) Tomar el bearer token del request actual
             var auth = Request.Headers.Authorization.ToString();
             var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
