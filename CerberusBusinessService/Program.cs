@@ -13,6 +13,7 @@ var jwtSettings = new JwtSettings();
 builder.Configuration.GetSection("JwtSettings").Bind(jwtSettings);
 builder.Services.Configure<WsOptions>(builder.Configuration.GetSection("WebServices:Abac"));
 builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("CerberusConfig")));
 builder.Services.AddSingleton(jwtSettings);
 // ===== Auth JWT =====
 builder.Services.AddAuthentication(options =>
@@ -42,6 +43,14 @@ builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
     http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
+builder.Services.AddHttpClient<AltaEmpleadoFuncions>((sp, http) =>
+{
+    var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
+
+    http.BaseAddress = new Uri(opt.BaseUrl);
+    http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
+    http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddAuthorization();
 // Add services to the container.
@@ -53,7 +62,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
-app.UsePathBase("/Apis");
+app.UsePathBase("/Negocio");
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {

@@ -5,7 +5,7 @@ using Microsoft.Data.SqlClient;
 namespace CerberusBusinessService.Controllers
 {
     [ApiController]
-    [Route("negocio/[controller]")]
+    [Route("api/[controller]")]
     public class CatalogosController : ControllerBase
     {
         private readonly string _cs;
@@ -15,7 +15,7 @@ namespace CerberusBusinessService.Controllers
             _cs = config.GetConnectionString("DefaultConnection")!;
         }
 
-        [HttpGet("ObtenerCatalogo")]
+        [HttpPost("ObtenerCatalogo")]
         public async Task<ActionResult<List<CatalogoResponse>>> ObtenerCatalogo(CatalogosRequest request, CancellationToken ct)
         {
             List<CatalogoResponse> response = new List<CatalogoResponse>();
@@ -31,7 +31,7 @@ namespace CerberusBusinessService.Controllers
             var reader = await cmd.ExecuteReaderAsync(ct);
 
             while (await reader.ReadAsync(ct))
-            {
+            {   
                 CatalogoResponse aux = new CatalogoResponse();
                 aux.Id = reader.GetInt32(reader.GetOrdinal("Id"));
                 aux.Nombre = reader.GetString(reader.GetOrdinal("Nombre"));
