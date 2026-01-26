@@ -14,11 +14,13 @@ namespace CerberusBusinessService.Controllers
     {
         private readonly ValidaAccionFunction _abac;
         private readonly AltaEmpleadoFuncions _altaEmpleadoFuncions;
+        private readonly ListadoEmpleadosFunctions _listadoEmpleadosFunctions;
 
-        public EmpleadosController(ValidaAccionFunction abac, AltaEmpleadoFuncions altaEmpleadoFuncions)
+        public EmpleadosController(ValidaAccionFunction abac, AltaEmpleadoFuncions altaEmpleadoFuncions,ListadoEmpleadosFunctions listadoEmpleadosFunctions)
         {
             _abac = abac;
             _altaEmpleadoFuncions = altaEmpleadoFuncions;
+            _listadoEmpleadosFunctions = listadoEmpleadosFunctions;
         }
 
         [HttpPost("ListadoEmpleados")]
@@ -34,8 +36,16 @@ namespace CerberusBusinessService.Controllers
 
             // 2) Llamar ABAC
             var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                return Ok(await _listadoEmpleadosFunctions.ObtenerListadoEmpleadosAsync());
+            }
+            else
+            {
+                //No autorizado
+                return Unauthorized("No se tiene acceso a esta función");
 
-            return Ok(new { allowed });
+            }
         }
 
         [HttpPost("AltaEmpleadoGeneral")]
