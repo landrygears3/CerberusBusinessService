@@ -2,6 +2,7 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 
 namespace CerberusBusinessService.Functions
 {
@@ -30,6 +31,39 @@ namespace CerberusBusinessService.Functions
                 var empleados = await connection.QueryAsync<ListadoEmpleadosResponse>(query);
                 return empleados;
             }
+        }
+        public async Task<EmpleadoDatosGeneralesResponse?> ObtenerPorUsuarioAsignadoAsync(string usuarioAsignado)
+        {
+            if (string.IsNullOrWhiteSpace(usuarioAsignado) || !Regex.IsMatch(usuarioAsignado, @"^CER\d{5}$"))
+                throw new Exception("UsuarioAsignado inválido (ej. CER00004)");
+
+            using var conn = new SqlConnection(_csCerberus);
+
+            var sql = @"
+                        SELECT TOP 1
+                            Id,
+                            Nombres,
+                            ApellidoPaterno,
+                            ApellidoMaterno,
+                            FechaNacimiento,
+                            sexoId        AS SexoId,
+                            Curp,
+                            RFC,
+                            Celular,
+                            Telefono,
+                            CorreoElectronico,
+                            origenVacanteId AS OrigenVacanteId,
+                            UsuarioAlta,
+                            FechaCreacion,
+                            UsuarioAsignado,
+                            NacionalidadId
+                        FROM dbo.DatosGeneralesEmpleado
+                        WHERE UsuarioAsignado = @UsuarioAsignado
+                        ORDER BY Id DESC;";
+
+            return await conn.QueryFirstOrDefaultAsync<EmpleadoDatosGeneralesResponse>(
+                sql,
+                new { UsuarioAsignado = usuarioAsignado });
         }
     }
 }
