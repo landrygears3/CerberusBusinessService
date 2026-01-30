@@ -15,7 +15,7 @@ namespace CerberusBusinessService.Functions
             _csCerberus = config.GetConnectionString("DefaultConnection")!;
         }
 
-        public async Task<IEnumerable<ListadoEmpleadosResponse>> ObtenerListadoEmpleadosAsync()
+        public async Task<List<ListadoEmpleadosResponse>> ObtenerListadoEmpleadosAsync()
         {
             using (var connection = new SqlConnection(_csCerberus))
             {
@@ -28,7 +28,7 @@ namespace CerberusBusinessService.Functions
                         Expediente
                     FROM 
                         View_ListadoEmpleados"; // Ajusta la consulta según tu esquema de base de datos
-                var empleados = await connection.QueryAsync<ListadoEmpleadosResponse>(query);
+                List<ListadoEmpleadosResponse> empleados = (await connection.QueryAsync<ListadoEmpleadosResponse>(query)).ToList();
                 return empleados;
             }
         }

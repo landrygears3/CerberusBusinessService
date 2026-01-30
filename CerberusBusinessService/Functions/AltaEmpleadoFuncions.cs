@@ -1,4 +1,5 @@
-﻿using CerberusBusinessService.Models.DTO.Empleados;
+﻿using CerberusBusinessService.Models.DTO;
+using CerberusBusinessService.Models.DTO.Empleados;
 using CerberusBusinessService.Models.DTO.Mail;
 using Dapper;
 using Microsoft.Data.SqlClient;
@@ -7,6 +8,7 @@ using System;
 using System.Data.SqlClient;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -46,29 +48,29 @@ namespace CerberusBusinessService.Functions
                 usr = await RegistrarUsuarioAuthAsync(data, password);
 
                 // 5. Insertar Persona (CerberusConfig)
-                personaId = await InsertarPersonaAsync(usr.UserId, data.Departamento);
+                personaId = await InsertarPersonaAsync(usr.userId, data.Departamento);
 
-                data.UsuarioAsignado = usr.NumeroUsuario;
+                data.UsuarioAsignado = usr.numeroUsuario;
                 // 6. Insertar Datos Generales (Cerberus)
                 await InsertarDatosGeneralesEmpleadoAsync(data);
 
                 await EnviarCorreoBienvenidaAsync(
                     data.CorreoElectronico,
-                    usr.NumeroUsuario,
+                    usr.numeroUsuario,
                     password);
 
-                return $"Empleado dado de alta correctamente. Usuario: {usr.NumeroUsuario}";
+                return $"Empleado dado de alta correctamente. Usuario: {usr.numeroUsuario}";
             }
             catch
             {
                 // 🔥 ROLLBACK COMPENSATORIO 🔥
-                //if (personaId.HasValue)
-                    //await RollbackPersonaAsync(personaId.Value);
+                if (personaId.HasValue)
+                    await RollbackPersonaAsync(personaId.Value);
 
                 //if (!string.IsNullOrWhiteSpace(usr.AspNetUserId))
                 //    await RollbackUsuarioAuthAsync(usr.AspNetUserId);
 
-                throw;
+                throw new Exception("No se pudo dar de alta el usuario");
             }
         }
         private async Task EnviarCorreoBienvenidaAsync(
@@ -145,12 +147,16 @@ namespace CerberusBusinessService.Functions
             };
 
             var response = await _httpClient.PostAsJsonAsync("api/Auth/register", body);
-
+            var raw = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
-                throw new Exception("Error al registrar usuario en Auth");
+            {
+                ResponseModel<string> result1 = JsonSerializer.Deserialize<ResponseModel<string>>(raw);
+                throw new Exception("Error al registrar usuario en Auth: " + result1?.Message);
+            }
 
-            var result = await response.Content.ReadFromJsonAsync<AuthRegisterResponse>();
-            if (result is null || string.IsNullOrWhiteSpace(result.UserId) || string.IsNullOrWhiteSpace(result.NumeroUsuario))
+            var result = JsonSerializer.Deserialize<AuthRegisterResponse>(raw);
+            //var result = await response.Content.ReadFromJsonAsync<AuthRegisterResponse>();
+            if (result is null || string.IsNullOrWhiteSpace(result.userId) || string.IsNullOrWhiteSpace(result.numeroUsuario))
                 throw new Exception("Auth/register no devolvió AspNetUserId y NumeroUsuario");
 
             return result;

@@ -1,5 +1,7 @@
-﻿using Azure.Core;
+﻿using Azure;
+using Azure.Core;
 using CerberusBusinessService.Functions;
+using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Empleados;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -28,9 +30,10 @@ namespace CerberusBusinessService.Controllers
 
         [HttpPost("EditarEmpleadoGenerales")]
         [Authorize]
-        public async Task<IActionResult> EditarEmpleadoGenerales([FromBody] EditarEmpleadoRequest req, CancellationToken ct)
+        public async Task<ResponseModel<EditarEmpleadoResponse>> EditarEmpleadoGenerales([FromBody] EditarEmpleadoRequest req, CancellationToken ct)
         {
-
+            ResponseModel<EditarEmpleadoResponse> response = new ResponseModel<EditarEmpleadoResponse>();
+            
             string tarea = "MODULO.RHH.GENERALES.MODIFICACION";
             // 1) Tomar el bearer token del request actual
             var auth = Request.Headers.Authorization.ToString();
@@ -44,39 +47,53 @@ namespace CerberusBusinessService.Controllers
             {
                 try
                 {
-                    await _editar.EditarAsync(req);
+                    response.Data = new EditarEmpleadoResponse();
+                    string estatusact = await _editar.EditarAsync(req);
 
-                    return Ok(new EditarEmpleadoResponse
+                    if (estatusact != "OK")
                     {
-                        Success = true,
-                        Message = "Empleado actualizado correctamente",
-                        UsuarioAsignado = req.UsuarioAsignado,
-                        FechaActualizacion = DateTime.UtcNow
-                    });
+                        response.IsSuccess = false;
+                        response.Message = "Error al actualizar el empleado: " + estatusact;
+                        response.Code = 400;
+                        response.Data = null;
+                    }
+                    else
+                    {
+                        response.IsSuccess = true;
+                        response.Message = "Empleado actualizado correctamente";
+                        response.Data.UsuarioAsignado = req.UsuarioAsignado;
+                        response.Data.FechaActualizacion = DateTime.UtcNow;
+                    }
+
+
                 }
                 catch (Exception ex)
                 {
-                    return BadRequest(new EditarEmpleadoResponse
-                    {
-                        Success = false,
-                        Message = ex.Message,
-                        UsuarioAsignado = req.UsuarioAsignado ?? string.Empty,
-                        FechaActualizacion = DateTime.UtcNow
-                    });
+                    response.IsSuccess = false;
+                    response.Code = 500;
+                    response.Message = "Error al actualizar el empleado";
+                    response.Desc = ex.Message;
+                    response.Data = null;
+
                 }
             }
             else
             {
                 //No autorizado
-                return Unauthorized("No se tiene acceso a esta función");
+                response.IsSuccess = false;
+                response.Code = 403;
+                response.Message = "No se tiene acceso a esta función";
             }
-             
+
+            return response;    
+
         }
 
         [HttpPost("ObtenerDatosGenerales")]
         [Authorize]
-        public async Task<IActionResult> ObtenerDatosGenerales(EmpleadoDatosGeneralesRequest request, CancellationToken ct)
+        public async Task<ResponseModel<EmpleadoDatosGeneralesResponse>> ObtenerDatosGenerales(EmpleadoDatosGeneralesRequest request, CancellationToken ct)
         {
+            ResponseModel<EmpleadoDatosGeneralesResponse> response = new ResponseModel<EmpleadoDatosGeneralesResponse>();
             string tarea = "MODULO.RHH.GENERALES.VER";
             // 1) Tomar el bearer token del request actual
             var auth = Request.Headers.Authorization.ToString();
@@ -88,25 +105,49 @@ namespace CerberusBusinessService.Controllers
             var allowed = await _abac.CheckAsync(tarea, token, ct);
             if (allowed)
             {
-                var data = await _listadoEmpleadosFunctions.ObtenerPorUsuarioAsignadoAsync(request.usuarioAsignado);
+                try
+                {
+                    response.Data = await _listadoEmpleadosFunctions.ObtenerPorUsuarioAsignadoAsync(request.usuarioAsignado);
 
-                if (data == null)
-                    return NotFound(new { success = false, message = "No se encontró empleado para ese UsuarioAsignado" });
+                    if (response.Data == null)
+                    {
+                        response.IsSuccess = false;
+                        response.Code = 404;
+                        response.Message = "No se encontró empleado para ese UsuarioAsignado";
+                    }
+                    else
+                    {
+                        response.IsSuccess = true;
+                        response.Code = 200;
+                        response.Message = "Ok";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.IsSuccess = false;
+                    response.Code = 500;
+                    response.Message = "Error al obtener los datos generales del empleado";
+                    response.Desc = ex.Message;
+                    response.Data = null;
+                }
 
-                return Ok(new { success = true, data });
             }
             else
             {
                 //No autorizado
-                return Unauthorized("No se tiene acceso a esta función");
+                response.IsSuccess = false;
+                response.Code = 403;
+                response.Message = "No se tiene acceso a esta función";
 
             }
+            return response;
         }
 
         [HttpGet("ListadoEmpleados")]
         [Authorize]
-        public async Task<IActionResult> ListadoEmpleados(CancellationToken ct)
+        public async Task<ResponseModel<List<ListadoEmpleadosResponse>>> ListadoEmpleados(CancellationToken ct)
         {
+            ResponseModel<List<ListadoEmpleadosResponse>> response = new ResponseModel<List<ListadoEmpleadosResponse>>();
             string tarea = "MODULO.RHH.EMPLEADOS.VER";
             // 1) Tomar el bearer token del request actual
             var auth = Request.Headers.Authorization.ToString();
@@ -118,20 +159,40 @@ namespace CerberusBusinessService.Controllers
             var allowed = await _abac.CheckAsync(tarea, token, ct);
             if (allowed)
             {
-                return Ok(await _listadoEmpleadosFunctions.ObtenerListadoEmpleadosAsync());
+                try
+                {
+                    List<ListadoEmpleadosResponse> data = await _listadoEmpleadosFunctions.ObtenerListadoEmpleadosAsync();
+                    response.IsSuccess = true;
+                    response.Code = 200;
+                    response.Message = "Listado de empleados obtenido correctamente";
+                    response.Data = data;
+
+                }
+                catch (Exception ex)
+                {
+                    response.IsSuccess = false;
+                    response.Code = 500;
+                    response.Message = "Error al obtener el listado de empleados";
+                    response.Desc = ex.Message;
+                    response.Data = null;
+                }
             }
             else
             {
                 //No autorizado
-                return Unauthorized("No se tiene acceso a esta función");
+                response.IsSuccess = false;
+                response.Code = 403;
+                response.Message = "No se tiene acceso a esta función";
 
             }
+            return response;
         }
 
         [HttpPost("AltaEmpleadoGeneral")]
         [Authorize]
-        public async Task<IActionResult> EltaEmpleado(EmpleadoAltaGeneralesRequest request, CancellationToken ct)
+        public async Task<ResponseModel<EmpleadoAltaGeneralesResponse>> EltaEmpleado(EmpleadoAltaGeneralesRequest request, CancellationToken ct)
         {
+            ResponseModel<EmpleadoAltaGeneralesResponse> response = new ResponseModel<EmpleadoAltaGeneralesResponse>();
             string tarea = "MODULO.RHH.EMPLEADOS.ALTA";
             // 1) Tomar el bearer token del request actual
             var auth = Request.Headers.Authorization.ToString();
@@ -149,35 +210,33 @@ namespace CerberusBusinessService.Controllers
                 {
                     var userId = await _altaEmpleadoFuncions.AltaEmpleadoGenerales(request);
 
-                    var response = new EmpleadoAltaGeneralesResponse
+                    response.IsSuccess = true;
+                    response.Message = "Empleado dado de alta correctamente";
+                    response.Data = new EmpleadoAltaGeneralesResponse
                     {
-                        Success = true,
-                        Message = "Empleado dado de alta correctamente",
                         UserId = userId,
                         FechaAlta = DateTime.UtcNow
                     };
 
-                    return Ok(response);
                 }
                 catch (Exception ex)
                 {
-                    var response = new EmpleadoAltaGeneralesResponse
-                    {
-                        Success = false,
-                        Message = ex.Message,
-                        FechaAlta = DateTime.UtcNow
-                    };
-
-                    return BadRequest(response);
+                    response.IsSuccess = false;
+                    response.Message = "Error al dar de alta el empleado";
+                    response.Data = null;   
+                    response.Desc = ex.Message;
+                    response.Code = 500;
                 }
             }
             else
             {
                 //No autorizado
-                return Unauthorized("No se tiene acceso a esta función");
+                response.IsSuccess = false;
+                response.Code = 403;
+                response.Message = "No se tiene acceso a esta función";
 
             }
-
-            }
+            return response;
+        }
         }
     }

@@ -14,9 +14,12 @@ namespace CerberusBusinessService.Functions
             _csCerberus = config.GetConnectionString("DefaultConnection")!;
         }
 
-        public async Task EditarAsync(EditarEmpleadoRequest req)
+        public async Task<string> EditarAsync(EditarEmpleadoRequest req)
         {
-            ValidarFormato(req);
+            
+
+            if (!string.IsNullOrEmpty(ValidarFormato(req)))
+                return ValidarFormato(req);
 
             using var conn = new SqlConnection(_csCerberus);
 
@@ -60,21 +63,23 @@ SET
 WHERE UsuarioAsignado = @UsuarioAsignado;";
 
             await conn.ExecuteAsync(sql, req);
+            return "OK";
         }
 
-        private void ValidarFormato(EditarEmpleadoRequest req)
+        private string ValidarFormato(EditarEmpleadoRequest req)
         {
             if (!Regex.IsMatch(req.UsuarioAsignado, @"^CER\d{5}$"))
-                throw new Exception("UsuarioAsignado inválido (ej. CER00001)");
+                return "UsuarioAsignado inválido (ej. CER00001)";
 
             if (!Regex.IsMatch(req.Curp, @"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$"))
-                throw new Exception("CURP inválida");
+                return "CURP inválida";
 
             if (!Regex.IsMatch(req.RFC, @"^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$"))
-                throw new Exception("RFC inválido");
+                return "RFC inválido";
 
             if (!Regex.IsMatch(req.CorreoElectronico, @"^[^@\s]+@[^@\s]+\.[^@\s]+$"))
-                throw new Exception("Correo electrónico inválido");
+                return "Correo electrónico inválido";
+            return string.Empty;
         }
     }
 }

@@ -2,9 +2,9 @@
 {
     public class AuthRegisterResponse
     {
-        public string UserId { get; set; } = string.Empty; 
-        public string NumeroUsuario { get; set; } = string.Empty; 
-        public string Email { get; set; } = string.Empty; 
+        public string userId { get; set; } = string.Empty; 
+        public string numeroUsuario { get; set; } = string.Empty; 
+        public string email { get; set; } = string.Empty; 
     }
 
 }
