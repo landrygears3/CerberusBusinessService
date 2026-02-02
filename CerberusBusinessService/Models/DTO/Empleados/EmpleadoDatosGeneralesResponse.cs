@@ -23,5 +23,8 @@
 
         public string UsuarioAsignado { get; set; } = string.Empty;
         public int NacionalidadId { get; set; }
+        public int EscolaridadId { get; set; }
+        public int EstadoCivilId { get; set; }
+        public int DepartamentoId { get; set; }
     }
 }

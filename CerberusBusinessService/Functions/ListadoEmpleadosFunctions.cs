@@ -41,23 +41,8 @@ namespace CerberusBusinessService.Functions
 
             var sql = @"
                         SELECT TOP 1
-                            Id,
-                            Nombres,
-                            ApellidoPaterno,
-                            ApellidoMaterno,
-                            FechaNacimiento,
-                            sexoId        AS SexoId,
-                            Curp,
-                            RFC,
-                            Celular,
-                            Telefono,
-                            CorreoElectronico,
-                            origenVacanteId AS OrigenVacanteId,
-                            UsuarioAlta,
-                            FechaCreacion,
-                            UsuarioAsignado,
-                            NacionalidadId
-                        FROM dbo.DatosGeneralesEmpleado
+                            *
+                        FROM View_DatosGenerales
                         WHERE UsuarioAsignado = @UsuarioAsignado
                         ORDER BY Id DESC;";
 
