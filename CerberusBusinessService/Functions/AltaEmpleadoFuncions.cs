@@ -29,10 +29,10 @@ namespace CerberusBusinessService.Functions
             _httpClient = httpClient;
         }
 
-        public async Task<string> AltaEmpleadoGenerales(EmpleadoAltaGeneralesRequest data)
+        public async Task<ResponseModel<AuthRegisterResponse>> AltaEmpleadoGenerales(EmpleadoAltaGeneralesRequest data)
         {
             int? personaId = null;
-            AuthRegisterResponse usr = null;
+            ResponseModel<AuthRegisterResponse> usr = null;
             try
             {
                 // 1. Validaciones de formato
@@ -47,31 +47,41 @@ namespace CerberusBusinessService.Functions
                 // 4. Registrar usuario en Auth
                 usr = await RegistrarUsuarioAuthAsync(data, password);
 
+                if (usr.data == null || !usr.isSuccess || usr.data == null || string.IsNullOrWhiteSpace(usr.data.userId))
+                    throw new Exception("Error al registrar usuario en Auth: " + usr?.message);
                 // 5. Insertar Persona (CerberusConfig)
-                personaId = await InsertarPersonaAsync(usr.userId, data.Departamento);
+                personaId = await InsertarPersonaAsync(usr.data.userId, data.Departamento);
 
-                data.UsuarioAsignado = usr.numeroUsuario;
+                data.UsuarioAsignado = usr.data.numeroUsuario;
                 // 6. Insertar Datos Generales (Cerberus)
                 await InsertarDatosGeneralesEmpleadoAsync(data);
 
                 await EnviarCorreoBienvenidaAsync(
                     data.CorreoElectronico,
-                    usr.numeroUsuario,
+                    usr.data.numeroUsuario,
                     password);
-
-                return $"Empleado dado de alta correctamente. Usuario: {usr.numeroUsuario}";
             }
-            catch
+            catch (Exception ex)
             {
                 // 🔥 ROLLBACK COMPENSATORIO 🔥
                 if (personaId.HasValue)
                     await RollbackPersonaAsync(personaId.Value);
+                if (usr == null)
+                    usr = new ResponseModel<AuthRegisterResponse>
+                    {
+                        isSuccess = false,
+                        code = 500,
+                        message = ex.Message,
+                        data = null
+                    };
 
                 //if (!string.IsNullOrWhiteSpace(usr.AspNetUserId))
                 //    await RollbackUsuarioAuthAsync(usr.AspNetUserId);
 
-                throw new Exception("No se pudo dar de alta el usuario");
             }
+
+
+            return usr;
         }
         private async Task EnviarCorreoBienvenidaAsync(
     string email,
@@ -134,7 +144,7 @@ namespace CerberusBusinessService.Functions
                 : inicial + apellidoPaterno.Trim().ToUpper();
         }
 
-        private async Task<AuthRegisterResponse> RegistrarUsuarioAuthAsync(
+        private async Task<ResponseModel<AuthRegisterResponse>> RegistrarUsuarioAuthAsync(
     EmpleadoAltaGeneralesRequest data,
     string password)
         {
@@ -151,13 +161,19 @@ namespace CerberusBusinessService.Functions
             if (!response.IsSuccessStatusCode)
             {
                 ResponseModel<string> result1 = JsonSerializer.Deserialize<ResponseModel<string>>(raw);
-                throw new Exception("Error al registrar usuario en Auth: " + result1?.Message);
+                throw new Exception("Error al registrar usuario en Auth: " + result1?.message);
             }
 
-            var result = JsonSerializer.Deserialize<AuthRegisterResponse>(raw);
+            var result = JsonSerializer.Deserialize<ResponseModel<AuthRegisterResponse>>(raw);
+
+            if (result.isSuccess == true)
+            {
+                if (result.data is null || string.IsNullOrWhiteSpace(result.data.userId) || string.IsNullOrWhiteSpace(result.data.numeroUsuario))
+                    result.message = "Auth/register no devolvió AspNetUserId y NumeroUsuario";
+            }
+
             //var result = await response.Content.ReadFromJsonAsync<AuthRegisterResponse>();
-            if (result is null || string.IsNullOrWhiteSpace(result.userId) || string.IsNullOrWhiteSpace(result.numeroUsuario))
-                throw new Exception("Auth/register no devolvió AspNetUserId y NumeroUsuario");
+
 
             return result;
         }

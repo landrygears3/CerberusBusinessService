@@ -37,6 +37,8 @@ builder.Services.AddAuthentication(options =>
 });
 builder.Services.AddScoped<ListadoEmpleadosFunctions>();
 builder.Services.AddScoped<EditarEmpleadoFunctions>();
+builder.Services.AddScoped<AltaDomiciliosFunctions>();
+builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;

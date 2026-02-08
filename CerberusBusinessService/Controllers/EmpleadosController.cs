@@ -47,42 +47,42 @@ namespace CerberusBusinessService.Controllers
             {
                 try
                 {
-                    response.Data = new EditarEmpleadoResponse();
+                    response.data = new EditarEmpleadoResponse();
                     string estatusact = await _editar.EditarAsync(req);
 
                     if (estatusact != "OK")
                     {
-                        response.IsSuccess = false;
-                        response.Message = "Error al actualizar el empleado: " + estatusact;
-                        response.Code = 400;
-                        response.Data = null;
+                        response.isSuccess = false;
+                        response.message = "Error al actualizar el empleado: " + estatusact;
+                        response.code = 400;
+                        response.data = null;
                     }
                     else
                     {
-                        response.IsSuccess = true;
-                        response.Message = "Empleado actualizado correctamente";
-                        response.Data.UsuarioAsignado = req.UsuarioAsignado;
-                        response.Data.FechaActualizacion = DateTime.UtcNow;
+                        response.isSuccess = true;
+                        response.message = "Empleado actualizado correctamente";
+                        response.data.UsuarioAsignado = req.UsuarioAsignado;
+                        response.data.FechaActualizacion = DateTime.UtcNow;
                     }
 
 
                 }
                 catch (Exception ex)
                 {
-                    response.IsSuccess = false;
-                    response.Code = 500;
-                    response.Message = "Error al actualizar el empleado";
-                    response.Desc = ex.Message;
-                    response.Data = null;
+                    response.isSuccess = false;
+                    response.code = 500;
+                    response.message = "Error al actualizar el empleado";
+                    response.desc = ex.Message;
+                    response.data = null;
 
                 }
             }
             else
             {
                 //No autorizado
-                response.IsSuccess = false;
-                response.Code = 403;
-                response.Message = "No se tiene acceso a esta función";
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
             }
 
             return response;    
@@ -107,37 +107,37 @@ namespace CerberusBusinessService.Controllers
             {
                 try
                 {
-                    response.Data = await _listadoEmpleadosFunctions.ObtenerPorUsuarioAsignadoAsync(request.usuarioAsignado);
+                    response.data = await _listadoEmpleadosFunctions.ObtenerPorUsuarioAsignadoAsync(request.usuarioAsignado);
 
-                    if (response.Data == null)
+                    if (response.data == null)
                     {
-                        response.IsSuccess = false;
-                        response.Code = 404;
-                        response.Message = "No se encontró empleado para ese UsuarioAsignado";
+                        response.isSuccess = false;
+                        response.code = 404;
+                        response.message = "No se encontró empleado para ese UsuarioAsignado";
                     }
                     else
                     {
-                        response.IsSuccess = true;
-                        response.Code = 200;
-                        response.Message = "Ok";
+                        response.isSuccess = true;
+                        response.code = 200;
+                        response.message = "Ok";
                     }
                 }
                 catch (Exception ex)
                 {
-                    response.IsSuccess = false;
-                    response.Code = 500;
-                    response.Message = "Error al obtener los datos generales del empleado";
-                    response.Desc = ex.Message;
-                    response.Data = null;
+                    response.isSuccess = false;
+                    response.code = 500;
+                    response.message = "Error al obtener los datos generales del empleado";
+                    response.desc = ex.Message;
+                    response.data = null;
                 }
 
             }
             else
             {
                 //No autorizado
-                response.IsSuccess = false;
-                response.Code = 403;
-                response.Message = "No se tiene acceso a esta función";
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
 
             }
             return response;
@@ -162,27 +162,27 @@ namespace CerberusBusinessService.Controllers
                 try
                 {
                     List<ListadoEmpleadosResponse> data = await _listadoEmpleadosFunctions.ObtenerListadoEmpleadosAsync();
-                    response.IsSuccess = true;
-                    response.Code = 200;
-                    response.Message = "Listado de empleados obtenido correctamente";
-                    response.Data = data;
+                    response.isSuccess = true;
+                    response.code = 200;
+                    response.message = "Listado de empleados obtenido correctamente";
+                    response.data = data;
 
                 }
                 catch (Exception ex)
                 {
-                    response.IsSuccess = false;
-                    response.Code = 500;
-                    response.Message = "Error al obtener el listado de empleados";
-                    response.Desc = ex.Message;
-                    response.Data = null;
+                    response.isSuccess = false;
+                    response.code = 500;
+                    response.message = "Error al obtener el listado de empleados";
+                    response.desc = ex.Message;
+                    response.data = null;
                 }
             }
             else
             {
                 //No autorizado
-                response.IsSuccess = false;
-                response.Code = 403;
-                response.Message = "No se tiene acceso a esta función";
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
 
             }
             return response;
@@ -190,7 +190,7 @@ namespace CerberusBusinessService.Controllers
 
         [HttpPost("AltaEmpleadoGeneral")]
         [Authorize]
-        public async Task<ResponseModel<EmpleadoAltaGeneralesResponse>> EltaEmpleado(EmpleadoAltaGeneralesRequest request, CancellationToken ct)
+        public async Task<ResponseModel<EmpleadoAltaGeneralesResponse>> AltaEmpleado(EmpleadoAltaGeneralesRequest request, CancellationToken ct)
         {
             ResponseModel<EmpleadoAltaGeneralesResponse> response = new ResponseModel<EmpleadoAltaGeneralesResponse>();
             string tarea = "MODULO.RHH.EMPLEADOS.ALTA";
@@ -208,32 +208,44 @@ namespace CerberusBusinessService.Controllers
                 //Alta empleado
                 try
                 {
-                    var userId = await _altaEmpleadoFuncions.AltaEmpleadoGenerales(request);
+                    ResponseModel<AuthRegisterResponse> userId = await _altaEmpleadoFuncions.AltaEmpleadoGenerales(request);
 
-                    response.IsSuccess = true;
-                    response.Message = "Empleado dado de alta correctamente";
-                    response.Data = new EmpleadoAltaGeneralesResponse
+                    if (!userId.isSuccess)
                     {
-                        UserId = userId,
-                        FechaAlta = DateTime.UtcNow
-                    };
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message = "Error al dar de alta el empleado: " + userId.message;
+                        response.data = null;
+                        return response;
+                    }
+                    else
+                    {
+                        response.isSuccess = true;
+                        response.message = "Empleado dado de alta correctamente";
+                        response.data = new EmpleadoAltaGeneralesResponse
+                        {
+                            UserId = userId.data.numeroUsuario,
+                            FechaAlta = DateTime.UtcNow
+                        };
+                    }
+
 
                 }
                 catch (Exception ex)
                 {
-                    response.IsSuccess = false;
-                    response.Message = "Error al dar de alta el empleado";
-                    response.Data = null;   
-                    response.Desc = ex.Message;
-                    response.Code = 500;
+                    response.isSuccess = false;
+                    response.message = "Error al dar de alta el empleado";
+                    response.data = null;   
+                    response.desc = ex.Message;
+                    response.code = 500;
                 }
             }
             else
             {
                 //No autorizado
-                response.IsSuccess = false;
-                response.Code = 403;
-                response.Message = "No se tiene acceso a esta función";
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
 
             }
             return response;

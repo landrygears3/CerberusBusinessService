@@ -30,7 +30,7 @@ namespace CerberusBusinessService.Functions
             {
                 throw new InvalidOperationException("La respuesta del servicio ABAC es nula.");
             }
-            return result.Data;
+            return result.data;
         }
     }
 }

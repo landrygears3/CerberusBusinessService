@@ -2,10 +2,10 @@
 {
     public class ResponseModel<T>
     {
-        public bool IsSuccess { get; set; }
-        public int Code { get; set; }
-        public string Message { get; set; }
-        public string Desc { get; set; }
-        public T Data { get; set; }
+        public bool isSuccess { get; set; }
+        public int code { get; set; }
+        public string message { get; set; }
+        public string desc { get; set; }
+        public T data { get; set; }
     }
 }
