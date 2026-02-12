@@ -49,7 +49,7 @@ namespace CerberusBusinessService.Functions
                 ColoniaID,
                 Its_Principal
             FROM Usuarios_Domicilios
-            WHERE Usuario = @Usuario
+            WHERE Usuario = @Usuario and Its_Active = 1
             ORDER BY Its_Principal DESC, IDdomicilio ASC;";
 
                 var result = (await conn.QueryAsync<ListadoDomiciliosResponse>(

@@ -13,6 +13,95 @@ namespace CerberusBusinessService.Functions
         {
             _csCerberus = config.GetConnectionString("DefaultConnection")!;
         }
+        public async Task<ResponseModel<string>> ActualizarDomicilioPrincipal(ActualizaDomicilioPrincipalRequest data)
+        {
+            var response = new ResponseModel<string>
+            {
+                isSuccess = false,
+                code = 400,
+                message = "Error al actualizar domicilio principal",
+                desc = null,
+                data = null
+            };
+
+            // Validaciones
+            if (data == null)
+            {
+                response.message = "Request vacío";
+                return response;
+            }
+
+            if (string.IsNullOrWhiteSpace(data.Usuario))
+            {
+                response.message = "Usuario es obligatorio";
+                return response;
+            }
+
+            if (data.IDdomicilio <= 0)
+            {
+                response.message = "IDdomicilio inválido";
+                return response;
+            }
+
+            try
+            {
+                using var conn = new SqlConnection(_csCerberus);
+                await conn.OpenAsync();
+
+                using var tx = conn.BeginTransaction();
+
+                // 1) Validar que exista y esté activo
+                // Si aún no tienes Its_Active, quita "AND Its_Active = 1"
+                var exists = await conn.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1)
+              FROM Usuarios_Domicilios
+              WHERE Usuario = @Usuario
+                AND IDdomicilio = @IDdomicilio
+                AND Its_Active = 1;",
+                    new { Usuario = data.Usuario.Trim(), IDdomicilio = data.IDdomicilio },
+                    tx);
+
+                if (exists == 0)
+                {
+                    response.message = "El domicilio no existe o está inactivo";
+                    return response;
+                }
+
+                // 2) Poner todos como NO principal
+                await conn.ExecuteAsync(
+                    @"UPDATE Usuarios_Domicilios
+              SET Its_Principal = 0
+              WHERE Usuario = @Usuario
+                AND Its_Active = 1;",
+                    new { Usuario = data.Usuario.Trim() },
+                    tx);
+
+                // 3) Poner el seleccionado como principal
+                await conn.ExecuteAsync(
+                    @"UPDATE Usuarios_Domicilios
+              SET Its_Principal = 1
+              WHERE Usuario = @Usuario
+                AND IDdomicilio = @IDdomicilio
+                AND Its_Active = 1;",
+                    new { Usuario = data.Usuario.Trim(), IDdomicilio = data.IDdomicilio },
+                    tx);
+
+                tx.Commit();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Domicilio principal actualizado correctamente";
+                response.data = "OK";
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.code = 500;
+                response.message = "Error al actualizar domicilio principal";
+                response.desc = ex.Message;
+                return response;
+            }
+        }
 
         public async Task<ResponseModel<string>> AltaDomicilios(AltaDomicilioRequest data)
         {
