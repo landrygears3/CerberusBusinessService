@@ -1,4 +1,6 @@
-﻿namespace CerberusBusinessService.Functions
+﻿using CerberusBusinessService.Models.DTO;
+
+namespace CerberusBusinessService.Functions
 {
     public class ValidaAccionFunction
     {
@@ -23,8 +25,12 @@
             resp.EnsureSuccessStatusCode();
 
             // El servicio regresa un boolean (true/false) en el body
-            var result = await resp.Content.ReadFromJsonAsync<bool>(cancellationToken: ct);
-            return result;
+            var result = await resp.Content.ReadFromJsonAsync<ResponseModel<bool>>(cancellationToken: ct);
+            if (result == null)
+            {
+                throw new InvalidOperationException("La respuesta del servicio ABAC es nula.");
+            }
+            return result.data;
         }
     }
 }

@@ -1,3 +1,4 @@
+using CerberusBusinessService.DataSecure;
 using CerberusBusinessService.Functions;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
@@ -11,6 +12,8 @@ var builder = WebApplication.CreateBuilder(args);
 var jwtSettings = new JwtSettings();
 builder.Configuration.GetSection("JwtSettings").Bind(jwtSettings);
 builder.Services.Configure<WsOptions>(builder.Configuration.GetSection("WebServices:Abac"));
+builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("CerberusConfig")));
 builder.Services.AddSingleton(jwtSettings);
 // ===== Auth JWT =====
 builder.Services.AddAuthentication(options =>
@@ -32,7 +35,20 @@ builder.Services.AddAuthentication(options =>
         ClockSkew = TimeSpan.Zero
     };
 });
+builder.Services.AddScoped<ListadoEmpleadosFunctions>();
+builder.Services.AddScoped<EditarEmpleadoFunctions>();
+builder.Services.AddScoped<AltaDomiciliosFunctions>();
+builder.Services.AddScoped<ListadoDomiciliosFunctions>();
+builder.Services.AddScoped<EliminadoDomicilioFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
+{
+    var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
+
+    http.BaseAddress = new Uri(opt.BaseUrl);
+    http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
+    http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddHttpClient<AltaEmpleadoFuncions>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
 
@@ -51,7 +67,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
-app.UsePathBase("/Apis");
+app.UsePathBase("/Negocio");
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
