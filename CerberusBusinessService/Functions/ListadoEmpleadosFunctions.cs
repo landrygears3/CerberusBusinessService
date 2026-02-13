@@ -27,7 +27,7 @@ namespace CerberusBusinessService.Functions
                         Estatus,
                         Expediente
                     FROM 
-                        View_ListadoEmpleados"; // Ajusta la consulta según tu esquema de base de datos
+                        View_ListadoEmpleados ORDER BY NombreCompleto"; // Ajusta la consulta según tu esquema de base de datos
                 List<ListadoEmpleadosResponse> empleados = (await connection.QueryAsync<ListadoEmpleadosResponse>(query)).ToList();
                 return empleados;
             }
