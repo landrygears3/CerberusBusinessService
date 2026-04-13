@@ -66,6 +66,7 @@ builder.Services.AddScoped<AltaDomiciliosFunctions>();
 builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddScoped<EliminadoDomicilioFunctions>();
 builder.Services.AddScoped<FileService>();
+builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
