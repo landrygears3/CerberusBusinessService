@@ -1,7 +1,10 @@
+using Amazon.S3;
 using CerberusBusinessService.DataSecure;
 using CerberusBusinessService.Functions;
+using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
+using CerberusBusinessService.Models.R2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -11,10 +14,32 @@ var builder = WebApplication.CreateBuilder(args);
 // ===== JWT settings =====
 var jwtSettings = new JwtSettings();
 builder.Configuration.GetSection("JwtSettings").Bind(jwtSettings);
+builder.Services.Configure<R2Settings>(
+    builder.Configuration.GetSection("R2")
+);
 builder.Services.Configure<WsOptions>(builder.Configuration.GetSection("WebServices:Abac"));
 builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("CerberusConfig")));
 builder.Services.AddSingleton(jwtSettings);
+// ===== R2 =====
+
+builder.Services.AddSingleton<IAmazonS3>(sp =>
+{
+    var settings = sp.GetRequiredService<IOptions<R2Settings>>().Value;
+
+    var config = new AmazonS3Config
+    {
+        ServiceURL = settings.ServiceUrl,
+        ForcePathStyle = true
+    };
+
+    return new AmazonS3Client(
+        settings.AccessKey,
+        settings.SecretKey,
+        config
+    );
+});
+
 // ===== Auth JWT =====
 builder.Services.AddAuthentication(options =>
 {
@@ -40,6 +65,7 @@ builder.Services.AddScoped<EditarEmpleadoFunctions>();
 builder.Services.AddScoped<AltaDomiciliosFunctions>();
 builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddScoped<EliminadoDomicilioFunctions>();
+builder.Services.AddScoped<FileService>();
 builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
