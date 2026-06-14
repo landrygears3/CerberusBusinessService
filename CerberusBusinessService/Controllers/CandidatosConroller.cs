@@ -113,5 +113,118 @@ namespace CerberusBusinessService.Controllers
             return response;
         }
 
+        [HttpPost("CommitSaludCandidatos")]
+        [Authorize]
+        public async Task<ResponseModel<bool>> CommitSaludCandidatos(CommitCandidatosSaludRequest data, CancellationToken ct)
+        {
+            ResponseModel<bool> response = new ResponseModel<bool>();
+
+            string tarea = "MODULO.RHH.CANDIDATOS.COMMIT";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                try
+                {
+
+                    response = await _candidatosFunctions.CommitSaludCandidatoAsync(data.candidatoId, data.datos, ct);
+
+
+                }
+                catch (Exception ex)
+                {
+                    response.isSuccess = false;
+                    response.code = 500;
+                    response.message = "Error al actualizar candidato";
+                    response.desc = ex.Message;
+                    response.data = false;
+
+                }
+            }
+            else
+            {
+                //No autorizado
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+            }
+
+            return response;
+        }
+
+        [HttpPost("GetSaludCandidato")]
+        [Authorize]
+        public async Task<ResponseModel<SaludGetResponse>> GetSaludCandidato(SaludGetRequest request, CancellationToken ct)
+        {
+            ResponseModel<SaludGetResponse> response = new ResponseModel<SaludGetResponse>();
+            string tarea = "MODULO.RHH.CANDIDATOS.VER";
+
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+
+            if (allowed)
+            {
+                try
+                {
+                    if (request == null || string.IsNullOrWhiteSpace(request.Usuario))
+                    {
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message = "Request inválido";
+                        response.desc = "El campo Usuario es obligatorio.";
+                        response.data = null;
+                        return response;
+                    }
+
+                    var result = await _candidatosFunctions.GetSaludAsync(request.Usuario, ct);
+
+                    if (!result.isSuccess)
+                    {
+                        response.isSuccess = false;
+                        response.code = result.code == 0 ? 400 : result.code;
+                        response.message = "Error al obtener información de salud";
+                        response.desc = result.desc;
+                        response.data = null;
+                        return response;
+                    }
+
+                    response.isSuccess = true;
+                    response.code = 200;
+                    response.message = "Información de salud obtenida correctamente";
+                    response.desc = result.desc;
+                    response.data = result.data;
+                }
+                catch (Exception ex)
+                {
+                    response.isSuccess = false;
+                    response.code = 500;
+                    response.message = "Error al obtener información de salud";
+                    response.desc = ex.Message;
+                    response.data = null;
+                }
+            }
+            else
+            {
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+                response.data = null;
+            }
+
+            return response;
+        }
+
     }
 }
