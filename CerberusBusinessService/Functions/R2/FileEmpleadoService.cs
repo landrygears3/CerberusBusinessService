@@ -9,13 +9,13 @@ using System.Data;
 namespace CerberusBusinessService.Functions.R2
 {
 
-    public class FileService
+    public class FileEmpleadoService
     {
         private readonly IAmazonS3 _s3;
         private readonly R2Settings _settings;
         private readonly string _csCerberus;
 
-        public FileService(IAmazonS3 s3, IOptions<R2Settings> settings, IConfiguration config)
+        public FileEmpleadoService(IAmazonS3 s3, IOptions<R2Settings> settings, IConfiguration config)
         {
             _s3 = s3;
             _settings = settings.Value;
@@ -255,7 +255,9 @@ namespace CerberusBusinessService.Functions.R2
                 Modulo,
                 FileNamed,
                 FileType,
-                RutaArchivo
+                RutaArchivo,
+                FechaVencimiento,
+                FechaExpedicion
             )
             VALUES
             (
@@ -263,7 +265,9 @@ namespace CerberusBusinessService.Functions.R2
                 @Modulo,
                 @FileName,
                 @FileType,
-                @RutaArchivo
+                @RutaArchivo,
+                @FechaVencimiento,
+                @FechaExpedicion
             );
 
             SELECT CAST(SCOPE_IDENTITY() AS INT);";
@@ -276,6 +280,8 @@ namespace CerberusBusinessService.Functions.R2
                 cmd.Parameters.Add("@FileName", SqlDbType.VarChar, 255).Value = request.fileName;
                 cmd.Parameters.Add("@FileType", SqlDbType.Int).Value = request.fileType;
                 cmd.Parameters.Add("@RutaArchivo", SqlDbType.VarChar, 500).Value = rutaArchivo;
+                cmd.Parameters.Add("@FechaVencimiento", SqlDbType.DateTime).Value = request.FechaVencimiento == null ? DBNull.Value : request.FechaVencimiento;
+                cmd.Parameters.Add("@FechaExpedicion", SqlDbType.DateTime).Value = request.FechaExpedicion == null ? DBNull.Value : request.FechaExpedicion;
 
                 await conn.OpenAsync();
                 var result = await cmd.ExecuteScalarAsync();

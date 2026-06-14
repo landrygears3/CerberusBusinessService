@@ -66,7 +66,8 @@ builder.Services.AddScoped<EditarEmpleadoFunctions>();
 builder.Services.AddScoped<AltaDomiciliosFunctions>();
 builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddScoped<EliminadoDomicilioFunctions>();
-builder.Services.AddScoped<FileService>();
+builder.Services.AddScoped<FileEmpleadoService>();
+builder.Services.AddScoped<FileCandidatoService>();
 builder.Services.AddScoped<CandidatosFunctions>();
 builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>

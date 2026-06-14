@@ -8,5 +8,7 @@
         public string categoria { get; set; }
         public string fileName { get; set; }
         public int fileType { get; set; }
+        public DateTime? FechaVencimiento { get; set; }
+        public DateTime? FechaExpedicion { get; set; }
     }
 }
