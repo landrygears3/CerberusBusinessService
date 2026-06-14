@@ -19,6 +19,7 @@ namespace CerberusBusinessService.Functions.Candidatos
             _csCerberus = config.GetConnectionString("DefaultConnection")!;
         }
 
+        #region Datos Generales Candidato
         public async Task<ResponseModel<CommitDatosGeneralesCandidatoResponse>> CommitDatosGeneralesCandidato(
             CommitDatosGeneralesCandidatoRequest data, CancellationToken ct)
         {
@@ -176,6 +177,9 @@ ORDER BY
             }
         }
 
+        #endregion
+
+        #region Salud Candidato
         public async Task<ResponseModel<bool>> CommitSaludCandidatoAsync(
             int candidatoId,
             SaludCommitRequest req, CancellationToken ct)
@@ -407,5 +411,459 @@ WHERE CandidatoId = @CandidatoId AND Its_Active = 1;
                 return response;
             }
         }
+        #endregion
+
+        #region Domicilio Candidato
+        public async Task<ResponseModel<string>> AltaDomiciliosCandidato(
+         AltaDomicilioCandidatoRequest data)
+        {
+            var response = new ResponseModel<string>
+            {
+                isSuccess = false,
+                code = 400,
+                message = "Error al registrar domicilios",
+                desc = null,
+                data = null
+            };
+
+            if (data == null)
+            {
+                response.message = "Request vacío";
+                return response;
+            }
+
+            if (data.CandidatoId <= 0)
+            {
+                response.message = "CandidatoId es obligatorio";
+                return response;
+            }
+
+            if (data.domicilios == null || data.domicilios.Count == 0)
+            {
+                response.message = "Debe enviar al menos un domicilio";
+                return response;
+            }
+
+            if (data.domicilios.Count(d => d.Its_Principal) > 1)
+            {
+                response.message = "Solo puede existir un domicilio principal por candidato";
+                return response;
+            }
+
+            foreach (var d in data.domicilios)
+            {
+                if (d == null)
+                {
+                    response.message = "Existe un domicilio nulo en la lista";
+                    return response;
+                }
+
+                if (string.IsNullOrWhiteSpace(d.Calle))
+                {
+                    response.message = "Calle es obligatoria en todos los domicilios";
+                    return response;
+                }
+
+                if (string.IsNullOrWhiteSpace(d.Numero_Exterior))
+                {
+                    response.message = "Numero_Exterior es obligatorio en todos los domicilios";
+                    return response;
+                }
+
+                if (d.EstadoID <= 0 || d.MunicipioID <= 0 || d.ColoniaID <= 0)
+                {
+                    response.message = "EstadoID, MunicipioID y ColoniaID deben ser mayores a cero";
+                    return response;
+                }
+            }
+
+            try
+            {
+                using var conn = new SqlConnection(_csCerberus);
+                await conn.OpenAsync();
+
+                using var tx = conn.BeginTransaction();
+
+                var candidatoExiste = await conn.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1)
+                      FROM dbo.DatosGeneralesCandidato
+                      WHERE ID = @CandidatoId;",
+                    new { data.CandidatoId },
+                    tx);
+
+                if (candidatoExiste == 0)
+                {
+                    tx.Rollback();
+                    response.message = "El candidato no existe";
+                    return response;
+                }
+
+                var nextId = await conn.ExecuteScalarAsync<int>(
+                    @"SELECT ISNULL(MAX(IDdomicilio), 0) + 1
+                      FROM dbo.Candidatos_Domicilios WITH (UPDLOCK, HOLDLOCK)
+                      WHERE CandidatoId = @CandidatoId;",
+                    new { data.CandidatoId },
+                    tx);
+
+                if (data.domicilios.Any(d => d.Its_Principal))
+                {
+                    await conn.ExecuteAsync(
+                        @"UPDATE dbo.Candidatos_Domicilios
+                          SET Its_Principal = 0
+                          WHERE CandidatoId = @CandidatoId
+                            AND Its_Active = 1;",
+                        new { data.CandidatoId },
+                        tx);
+                }
+
+                const string insertSql = @"
+                    INSERT INTO dbo.Candidatos_Domicilios
+                    (
+                        CandidatoId,
+                        IDdomicilio,
+                        Calle,
+                        Numero_Interior,
+                        Numero_Exterior,
+                        Codigo_Postal,
+                        EstadoID,
+                        MunicipioID,
+                        ColoniaID,
+                        Its_Principal
+                    )
+                    VALUES
+                    (
+                        @CandidatoId,
+                        @IDdomicilio,
+                        @Calle,
+                        @Numero_Interior,
+                        @Numero_Exterior,
+                        @Codigo_Postal,
+                        @EstadoID,
+                        @MunicipioID,
+                        @ColoniaID,
+                        @Its_Principal
+                    );";
+
+                int totalInsertados = 0;
+
+                for (int i = 0; i < data.domicilios.Count; i++)
+                {
+                    var d = data.domicilios[i];
+
+                    totalInsertados += await conn.ExecuteAsync(
+                        insertSql,
+                        new
+                        {
+                            data.CandidatoId,
+                            IDdomicilio = nextId + i,
+                            Calle = d.Calle.Trim(),
+                            Numero_Interior = string.IsNullOrWhiteSpace(d.Numero_Interior)
+                                ? null
+                                : d.Numero_Interior.Trim(),
+                            Numero_Exterior = d.Numero_Exterior.Trim(),
+                            Codigo_Postal = string.IsNullOrWhiteSpace(d.Codigo_Postal)
+                                ? null
+                                : d.Codigo_Postal.Trim(),
+                            d.EstadoID,
+                            d.MunicipioID,
+                            d.ColoniaID,
+                            d.Its_Principal
+                        },
+                        tx);
+                }
+
+                tx.Commit();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Domicilios registrados correctamente";
+                response.data = $"Registros insertados: {totalInsertados}";
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.code = 500;
+                response.message = "Error al insertar domicilios";
+                response.desc = ex.Message;
+                return response;
+            }
+        }
+
+        public async Task<ResponseModel<string>> ActualizarDomicilioPrincipalCandidato(
+            ActualizaDomicilioPrincipalCandidatoRequest data)
+        {
+            var response = new ResponseModel<string>
+            {
+                isSuccess = false,
+                code = 400,
+                message = "Error al actualizar domicilio principal",
+                desc = null,
+                data = null
+            };
+
+            if (data == null)
+            {
+                response.message = "Request vacío";
+                return response;
+            }
+
+            if (data.CandidatoId <= 0)
+            {
+                response.message = "CandidatoId es obligatorio";
+                return response;
+            }
+
+            if (data.IDdomicilio <= 0)
+            {
+                response.message = "IDdomicilio inválido";
+                return response;
+            }
+
+            try
+            {
+                using var conn = new SqlConnection(_csCerberus);
+                await conn.OpenAsync();
+
+                using var tx = conn.BeginTransaction();
+
+                var exists = await conn.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1)
+                      FROM dbo.Candidatos_Domicilios
+                      WHERE CandidatoId = @CandidatoId
+                        AND IDdomicilio = @IDdomicilio
+                        AND Its_Active = 1;",
+                    new { data.CandidatoId, data.IDdomicilio },
+                    tx);
+
+                if (exists == 0)
+                {
+                    tx.Rollback();
+                    response.message = "El domicilio no existe o está inactivo";
+                    return response;
+                }
+
+                await conn.ExecuteAsync(
+                    @"UPDATE dbo.Candidatos_Domicilios
+                      SET Its_Principal = 0
+                      WHERE CandidatoId = @CandidatoId
+                        AND Its_Active = 1;",
+                    new { data.CandidatoId },
+                    tx);
+
+                await conn.ExecuteAsync(
+                    @"UPDATE dbo.Candidatos_Domicilios
+                      SET Its_Principal = 1
+                      WHERE CandidatoId = @CandidatoId
+                        AND IDdomicilio = @IDdomicilio
+                        AND Its_Active = 1;",
+                    new { data.CandidatoId, data.IDdomicilio },
+                    tx);
+
+                tx.Commit();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Domicilio principal actualizado correctamente";
+                response.data = "OK";
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.code = 500;
+                response.message = "Error al actualizar domicilio principal";
+                response.desc = ex.Message;
+                return response;
+            }
+        }
+
+        public async Task<ResponseModel<string>> EliminarDomicilioCandidato(
+            EliminadoDomicilioCandidatoRequest data)
+        {
+            var response = new ResponseModel<string>
+            {
+                isSuccess = false,
+                code = 400,
+                message = "Error al eliminar domicilio",
+                desc = null,
+                data = null
+            };
+
+            if (data == null)
+            {
+                response.message = "Request vacío";
+                return response;
+            }
+
+            if (data.CandidatoId <= 0)
+            {
+                response.message = "CandidatoId es obligatorio";
+                return response;
+            }
+
+            if (data.IDdomicilio <= 0)
+            {
+                response.message = "IDdomicilio inválido";
+                return response;
+            }
+
+            try
+            {
+                using var conn = new SqlConnection(_csCerberus);
+                await conn.OpenAsync();
+
+                using var tx = conn.BeginTransaction();
+
+                var dom = await conn.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT Its_Principal, Its_Active
+                      FROM dbo.Candidatos_Domicilios
+                      WHERE CandidatoId = @CandidatoId
+                        AND IDdomicilio = @IDdomicilio;",
+                    new { data.CandidatoId, data.IDdomicilio },
+                    tx);
+
+                if (dom == null)
+                {
+                    tx.Rollback();
+                    response.message = "El domicilio no existe";
+                    return response;
+                }
+
+                bool itsPrincipal = (bool)dom.Its_Principal;
+                bool itsActive = (bool)dom.Its_Active;
+
+                if (!itsActive)
+                {
+                    tx.Rollback();
+                    response.message = "El domicilio ya se encuentra eliminado";
+                    return response;
+                }
+
+                var activos = await conn.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1)
+                      FROM dbo.Candidatos_Domicilios
+                      WHERE CandidatoId = @CandidatoId
+                        AND Its_Active = 1;",
+                    new { data.CandidatoId },
+                    tx);
+
+                if (activos <= 1)
+                {
+                    tx.Rollback();
+                    response.message = "No es posible eliminar el último domicilio activo del candidato.";
+                    return response;
+                }
+
+                await conn.ExecuteAsync(
+                    @"UPDATE dbo.Candidatos_Domicilios
+                      SET Its_Active = 0,
+                          Its_Principal = 0
+                      WHERE CandidatoId = @CandidatoId
+                        AND IDdomicilio = @IDdomicilio;",
+                    new { data.CandidatoId, data.IDdomicilio },
+                    tx);
+
+                if (itsPrincipal)
+                {
+                    var nuevoPrincipalId = await conn.ExecuteScalarAsync<int?>(
+                        @"SELECT TOP (1) IDdomicilio
+                          FROM dbo.Candidatos_Domicilios
+                          WHERE CandidatoId = @CandidatoId
+                            AND Its_Active = 1
+                          ORDER BY IDdomicilio ASC;",
+                        new { data.CandidatoId },
+                        tx);
+
+                    if (nuevoPrincipalId.HasValue)
+                    {
+                        await conn.ExecuteAsync(
+                            @"UPDATE dbo.Candidatos_Domicilios
+                              SET Its_Principal = 1
+                              WHERE CandidatoId = @CandidatoId
+                                AND IDdomicilio = @IDdomicilio;",
+                            new
+                            {
+                                data.CandidatoId,
+                                IDdomicilio = nuevoPrincipalId.Value
+                            },
+                            tx);
+                    }
+                }
+
+                tx.Commit();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Domicilio eliminado correctamente";
+                response.data = "OK";
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.code = 500;
+                response.message = "Error al eliminar domicilio";
+                response.desc = ex.Message;
+                return response;
+            }
+        }
+
+        public async Task<ResponseModel<List<ListadoDomiciliosResponse>>> ListadoDomiciliosCandidato(
+            int candidatoId)
+        {
+            var response = new ResponseModel<List<ListadoDomiciliosResponse>>
+            {
+                isSuccess = false,
+                code = 400,
+                message = "Error al obtener domicilios",
+                desc = null,
+                data = null
+            };
+
+            if (candidatoId <= 0)
+            {
+                response.message = "El parámetro candidatoId es obligatorio";
+                return response;
+            }
+
+            try
+            {
+                using var conn = new SqlConnection(_csCerberus);
+
+                var sql = @"
+                    SELECT
+                        IDdomicilio,
+                        Calle,
+                        Numero_Exterior,
+                        Numero_Interior,
+                        Codigo_Postal,
+                        EstadoID,
+                        MunicipioID,
+                        ColoniaID,
+                        Its_Principal
+                    FROM dbo.Candidatos_Domicilios
+                    WHERE CandidatoId = @CandidatoId
+                      AND Its_Active = 1
+                    ORDER BY Its_Principal DESC, IDdomicilio ASC;";
+
+                var result = (await conn.QueryAsync<ListadoDomiciliosResponse>(
+                    sql,
+                    new { CandidatoId = candidatoId }
+                )).ToList();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Domicilios obtenidos correctamente";
+                response.data = result;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.code = 500;
+                response.message = "Error al consultar domicilios";
+                response.desc = ex.Message;
+                return response;
+            }
+        }
+        #endregion
     }
 }

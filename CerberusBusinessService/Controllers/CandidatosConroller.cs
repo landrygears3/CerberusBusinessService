@@ -22,6 +22,8 @@ namespace CerberusBusinessService.Controllers
             _abac = abac;
             _candidatosFunctions = candidatosFunctions;
         }
+
+        #region Generales
         [HttpPost("GetCandidatos")]
         [Authorize]
         public async Task<ResponseModel<List<ListadoCandidatosResponse>>> ObtenerListadoCandidatos(CancellationToken ct)
@@ -66,7 +68,7 @@ namespace CerberusBusinessService.Controllers
 
             return response;
         }
-
+        
         [HttpPost("CommitGeneralCandidato")]
         [Authorize]
         public async Task<ResponseModel<CommitDatosGeneralesCandidatoResponse>>  CommitDatosGeneralesCandidato(
@@ -112,7 +114,9 @@ namespace CerberusBusinessService.Controllers
 
             return response;
         }
+        #endregion
 
+        #region salud
         [HttpPost("CommitSaludCandidatos")]
         [Authorize]
         public async Task<ResponseModel<bool>> CommitSaludCandidatos(CommitCandidatosSaludRequest data, CancellationToken ct)
@@ -225,6 +229,125 @@ namespace CerberusBusinessService.Controllers
 
             return response;
         }
+        #endregion
 
+        #region Domicilios
+        [HttpPost("CandidatoActualizaPrincipal")]
+        [Authorize]
+        public async Task<ResponseModel<string>> ActualizaPrincipal([FromBody] ActualizaDomicilioPrincipalCandidatoRequest req, CancellationToken ct)
+        {
+            ResponseModel<string> response = new ResponseModel<string>();
+
+            string tarea = "MODULO.RHH.CANDIDATOS.COMMIT";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                response = await _candidatosFunctions.ActualizarDomicilioPrincipalCandidato(req);
+            }
+            else
+            {
+                //No autorizado
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+            }
+            return response;
+        }
+
+        [HttpPost("CandidatoEliminaDomicilio")]
+        [Authorize]
+        public async Task<ResponseModel<string>> EliminaDomicilio([FromBody] EliminadoDomicilioCandidatoRequest req, CancellationToken ct)
+        {
+            ResponseModel<string> response = new ResponseModel<string>();
+
+            string tarea = "MODULO.RHH.CANDIDATOS.COMMIT";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                response = await _candidatosFunctions.EliminarDomicilioCandidato(req);
+            }
+            else
+            {
+                //No autorizado
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+            }
+            return response;
+        }
+
+        [HttpPost("CandidatoListadoDomicilios")]
+        [Authorize]
+        public async Task<ResponseModel<List<ListadoDomiciliosResponse>>> ListadoDomicilios([FromBody] ListadoDomiciliosCandidatoRequest req, CancellationToken ct)
+        {
+            ResponseModel<List<ListadoDomiciliosResponse>> response = new ResponseModel<List<ListadoDomiciliosResponse>>();
+
+            string tarea = "MODULO.RHH.CANDIDATOS.COMMIT";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                response = await _candidatosFunctions.ListadoDomiciliosCandidato(req.Candidato);
+            }
+            else
+            {
+                //No autorizado
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+            }
+            return response;
+        }
+
+        [HttpPost("AltaDomicilio")]
+        [Authorize]
+        public async Task<ResponseModel<string>> AltaDomicilio([FromBody] AltaDomicilioCandidatoRequest req, CancellationToken ct)
+        {
+            ResponseModel<string> response = new ResponseModel<string>();
+
+            string tarea = "MODULO.RHH.CANDIDATOS.COMMIT";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                response = await _candidatosFunctions.AltaDomiciliosCandidato(req);
+            }
+            else
+            {
+                //No autorizado
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+            }
+
+            return response;
+        }
+        #endregion
     }
 }
