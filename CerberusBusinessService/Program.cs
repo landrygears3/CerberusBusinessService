@@ -1,6 +1,7 @@
 using Amazon.S3;
 using CerberusBusinessService.DataSecure;
 using CerberusBusinessService.Functions;
+using CerberusBusinessService.Functions.Candidatos;
 using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
@@ -66,6 +67,7 @@ builder.Services.AddScoped<AltaDomiciliosFunctions>();
 builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddScoped<EliminadoDomicilioFunctions>();
 builder.Services.AddScoped<FileService>();
+builder.Services.AddScoped<CandidatosFunctions>();
 builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
