@@ -149,6 +149,7 @@ namespace CerberusBusinessService.Functions.Candidatos
         ) X
     ), '') AS Areas
 FROM dbo.DatosGeneralesCandidato C
+WHERE C.Its_Active = 1
 ORDER BY
     C.ApellidoPaterno,
     C.ApellidoMaterno,
@@ -177,6 +178,92 @@ ORDER BY
             }
         }
 
+        public async Task<ResponseModel<ObtenerDatosGeneralesCandidatoResponse>> ObtenerDatosGeneralesCandidato(
+    ObtenerDatosGeneralesCandidatoRequest request)
+        {
+            var response = new ResponseModel<ObtenerDatosGeneralesCandidatoResponse>
+            {
+                isSuccess = false,
+                code = 400,
+                message = "Error al obtener datos generales del candidato",
+                desc = null,
+                data = null
+            };
+
+            if (request == null || request.Id <= 0)
+            {
+                response.message = "El Id del candidato es obligatorio.";
+                return response;
+            }
+
+            try
+            {
+                using var conn = new SqlConnection(_csCerberus);
+
+                const string sqlCandidato = @"
+            SELECT TOP 1
+                ID AS Id,
+                Nombres,
+                ApellidoPaterno,
+                ApellidoMaterno,
+                FechaNacimiento,
+                sexoId AS SexoId,
+                Curp,
+                EscolaridadId,
+                EstadoCivilId,
+                RFC,
+                Celular,
+                Telefono,
+                CorreoElectronico,
+                NacionalidadId,
+                UsuarioAlta AS UsuarioOperacion
+            FROM dbo.DatosGeneralesCandidato
+            WHERE ID = @Id
+              AND ISNULL(Its_Active, 1) = 1;";
+
+                var candidato = await conn.QueryFirstOrDefaultAsync<ObtenerDatosGeneralesCandidatoResponse>(
+                    sqlCandidato,
+                    new { request.Id });
+
+                if (candidato == null)
+                {
+                    response.code = 404;
+                    response.message = "Candidato no encontrado.";
+                    response.desc = "No existe un candidato activo con el Id especificado.";
+                    return response;
+                }
+
+                const string sqlPuestos = @"
+            SELECT PuestoId
+            FROM dbo.CandidatoPuesto
+            WHERE CandidatoId = @Id
+            ORDER BY PuestoId;";
+
+                var puestos = await conn.QueryAsync<long>(
+                    sqlPuestos,
+                    new { request.Id });
+
+                candidato.Puestos = puestos.ToList();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Datos generales del candidato obtenidos correctamente.";
+                response.desc = "Consulta realizada correctamente.";
+                response.data = candidato;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message = "Error al consultar datos generales del candidato.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+        }
         #endregion
 
         #region Salud Candidato

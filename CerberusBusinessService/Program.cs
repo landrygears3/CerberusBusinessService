@@ -2,6 +2,7 @@ using Amazon.S3;
 using CerberusBusinessService.DataSecure;
 using CerberusBusinessService.Functions;
 using CerberusBusinessService.Functions.Candidatos;
+using CerberusBusinessService.Functions.Contratacion;
 using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
@@ -79,6 +80,14 @@ builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
 builder.Services.AddHttpClient<AltaEmpleadoFuncions>((sp, http) =>
+{
+    var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
+
+    http.BaseAddress = new Uri(opt.BaseUrl);
+    http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
+    http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddHttpClient<ContratacionCandidatoFunctions>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
 

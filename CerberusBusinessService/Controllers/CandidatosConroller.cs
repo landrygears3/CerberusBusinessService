@@ -114,6 +114,68 @@ namespace CerberusBusinessService.Controllers
 
             return response;
         }
+
+        //ObtenerDatosGeneralesCandidato
+        [HttpPost("ObtenerDatosGeneralesCandidato")]
+        [Authorize]
+        public async Task<ResponseModel<ObtenerDatosGeneralesCandidatoResponse>> ObtenerDatosGeneralesCandidato(ObtenerDatosGeneralesCandidatoRequest request, CancellationToken ct)
+        {
+            ResponseModel<ObtenerDatosGeneralesCandidatoResponse> response = new ResponseModel<ObtenerDatosGeneralesCandidatoResponse>();
+            string tarea = "MODULO.RHH.CANDIDATOS.VER";
+            // 1) Tomar el bearer token del request actual
+            var auth = Request.Headers.Authorization.ToString();
+            var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? auth["Bearer ".Length..].Trim()
+                : auth.Trim();
+            // 2) Llamar ABAC
+            var allowed = await _abac.CheckAsync(tarea, token, ct);
+            if (allowed)
+            {
+                try
+                {
+                    if (request == null || request.Id == 0)
+                    {
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message = "Request inválido";
+                        response.desc = "El campo Id es obligatorio.";
+                        response.data = null;
+                        return response;
+                    }
+                    var result = await _candidatosFunctions.ObtenerDatosGeneralesCandidato(request);
+                    if (!result.isSuccess)
+                    {
+                        response.isSuccess = false;
+                        response.code = result.code == 0 ? 400 : result.code;
+                        response.message = "Error al obtener información del candidato";
+                        response.desc = result.desc;
+                        response.data = null;
+                        return response;
+                    }
+                    response.isSuccess = true;
+                    response.code = 200;
+                    response.message = "Información del candidato obtenida correctamente";
+                    response.desc = result.desc;
+                    response.data = result.data;
+                }
+                catch (Exception ex)
+                {
+                    response.isSuccess = false;
+                    response.code = 500;
+                    response.message = "Error al obtener información del candidato";
+                    response.desc = ex.Message;
+                    response.data = null;
+                }
+            }
+            else
+            {
+                response.isSuccess = false;
+                response.code = 403;
+                response.message = "No se tiene acceso a esta función";
+                response.data = null;
+            }
+            return response;
+        }
         #endregion
 
         #region salud
