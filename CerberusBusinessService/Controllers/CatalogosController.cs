@@ -38,7 +38,9 @@ namespace CerberusBusinessService.Controllers
                 while (await reader.ReadAsync(ct))
                 {
                     CatalogoResponse aux = new CatalogoResponse();
-                    aux.Id = reader.GetInt32(reader.GetOrdinal("Id"));
+                    object dat = reader.IsDBNull(0) ? 0 : reader.GetValue(0);
+
+                    aux.Id = Convert.ToInt64(dat);
                     aux.Nombre = reader.GetString(reader.GetOrdinal("Nombre"));
                     response.data.Add(aux);
                 }
