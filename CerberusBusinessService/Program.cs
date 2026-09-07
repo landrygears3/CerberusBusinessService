@@ -7,6 +7,9 @@ using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
 using CerberusBusinessService.Models.R2;
+using CerberusBusinessService.Functions.Asistencias;
+using CerberusBusinessService.Functions.Notificaciones;
+using CerberusBusinessService.Models.Notificaciones;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -69,8 +72,12 @@ builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddScoped<EliminadoDomicilioFunctions>();
 builder.Services.AddScoped<FileEmpleadoService>();
 builder.Services.AddScoped<FileCandidatoService>();
+builder.Services.AddScoped<FileAsistenciaService>();
+builder.Services.AddScoped<AsistenciasFunctions>();
 builder.Services.AddScoped<CandidatosFunctions>();
 builder.Services.AddScoped<SaludFunctions>();
+builder.Services.AddScoped<NotificationClient>();
+builder.Services.AddScoped<ServicioNotificationFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
@@ -95,6 +102,9 @@ builder.Services.AddHttpClient<ContratacionCandidatoFunctions>((sp, http) =>
     http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
+builder.Services.Configure<NotificationOptions>(
+    builder.Configuration.GetSection(
+        "WebServices:Notificaciones"));
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddAuthorization();
 // Add services to the container.
@@ -117,7 +127,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
