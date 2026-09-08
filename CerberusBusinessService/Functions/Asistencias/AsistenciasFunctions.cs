@@ -12,6 +12,7 @@ namespace CerberusBusinessService.Functions.Asistencias
         private const int MINUTOS_TOLERANCIA_RETARDO = 10;
 
         private const int ESTATUS_EN_TURNO = 1;
+        private const int ESTATUS_FINALIZADA = 2;
         private const int ESTATUS_PENDIENTE_AUTORIZAR = 3;
         private const int ESTATUS_CANCELADA = 4;
 
@@ -58,10 +59,6 @@ namespace CerberusBusinessService.Functions.Asistencias
 
             try
             {
-                // ====================================================
-                // 1. VALIDAR IDENTIDAD
-                // ====================================================
-
                 if (string.IsNullOrWhiteSpace(numeroUsuario))
                 {
                     response.isSuccess = false;
@@ -81,20 +78,11 @@ namespace CerberusBusinessService.Functions.Asistencias
                 await conn.OpenAsync(ct);
 
 
-                // ====================================================
-                // 2. HORA ACTUAL DEL SERVIDOR SQL
-                // ====================================================
-
                 DateTime fechaHoraActual =
-                    await conn.ExecuteScalarAsync<DateTime>(
-                        new CommandDefinition(
-                            "SELECT SYSDATETIME();",
-                            cancellationToken: ct));
+                    await ObtenerFechaServidorAsync(
+                        conn,
+                        ct);
 
-
-                // ====================================================
-                // 3. OBTENER EMPLEADO DESDE EL TOKEN
-                // ====================================================
 
                 EmpleadoAsistenciaDto? empleado =
                     await ObtenerEmpleadoAsync(
@@ -114,10 +102,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
-                // ====================================================
-                // 4. OBTENER TURNO ASIGNADO
-                // ====================================================
 
                 var turno =
                     await ObtenerTurnoProximoAsync(
@@ -155,10 +139,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     turno.Value.SalidaProgramada;
 
 
-                // ====================================================
-                // 5. OBTENER HORARIO OPERATIVO DEL SERVICIO
-                // ====================================================
-
                 ServicioHorarioCheckInDto? horarioServicio =
                     await ObtenerHorarioServicioAsync(
                         conn,
@@ -179,34 +159,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 6. DETERMINAR TIPO DE CHECK-IN
-                // ====================================================
-                //
-                // 00:00 -> 00:00 T+1
-                //
-                // = servicio continuo
-                // = requiere relevo
-                // = requiere autorización
-                //
-                //
-                // Ejemplo:
-                //
-                // 07:00 -> 21:00
-                //
-                // = apertura
-                // = no requiere relevo
-                // = entra directamente EN TURNO
-                // ====================================================
-
                 bool esRelevoContinuo =
                     EsServicioAtencionContinua(
                         horarioServicio);
 
-
-                // ====================================================
-                // 7. DISPATCHER
-                // ====================================================
 
                 if (esRelevoContinuo)
                 {
@@ -262,26 +218,323 @@ namespace CerberusBusinessService.Functions.Asistencias
 
 
         // ============================================================
-        // CHECK-IN DE APERTURA
+        // CHECK-OUT
         // ============================================================
-        //
-        // Servicio que NO es atención continua.
-        //
-        // Ejemplo:
-        //
-        // 07:00 -> 21:00
-        //
-        // No requiere:
-        //
-        // - empleado saliente
-        // - relevo
-        // - firmas de relevo
-        // - ETO6
-        // - resguardos
-        // - autorización
-        // - notificación
-        //
-        // Queda directamente EN TURNO.
+
+        public async Task<ResponseModel<CheckOutResponse>>
+            ProcesarCheckOut(
+                string numeroUsuario,
+                bool esOficina,
+                CancellationToken ct)
+        {
+            ResponseModel<CheckOutResponse> response =
+                new ResponseModel<CheckOutResponse>();
+
+
+            SqlTransaction? transaction =
+                null;
+
+
+            try
+            {
+                // ====================================================
+                // 1. USUARIO AUTENTICADO
+                // ====================================================
+
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
+                {
+                    response.isSuccess = false;
+                    response.code = 401;
+                    response.message =
+                        "No fue posible identificar al empleado.";
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                // ====================================================
+                // 2. DISPATCHER DE CHECK-OUT
+                // ====================================================
+                //
+                // OFICINA:
+                //
+                // NO relevo.
+                // NO autorización.
+                // NO supervisor.
+                // NO formulario.
+                // NO notificación.
+                //
+                // Cierra directamente la asistencia.
+                //
+                // LOS DEMÁS:
+                //
+                // NO pueden usar el cierre directo.
+                // Deben ir por flujo de relevo.
+                // ====================================================
+
+                if (!esOficina)
+                {
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "El Check-Out de este empleado requiere el flujo de relevo.";
+                    response.desc =
+                        "El Check-Out directo únicamente aplica al rol Oficina.";
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                using var conn =
+                    new SqlConnection(
+                        _csCerberus);
+
+
+                await conn.OpenAsync(ct);
+
+
+                DateTime fechaHoraActual =
+                    await ObtenerFechaServidorAsync(
+                        conn,
+                        ct);
+
+
+                transaction =
+                    conn.BeginTransaction();
+
+
+                // ====================================================
+                // 3. BUSCAR ASISTENCIA ACTIVA
+                // ====================================================
+                //
+                // Solamente una asistencia EN TURNO puede cerrarse.
+                //
+                // ESTATUS 1 = EN TURNO
+                // ====================================================
+
+                const string sqlAsistencia = @"
+SELECT TOP (1)
+    AsistenciaId,
+    ServicioId,
+    ServicioEmpleadoId,
+    NumeroEmpleadoEntrante,
+    FechaTurno,
+    FechaHoraEntradaProgramada,
+    FechaHoraSalidaProgramada,
+    FechaHoraCheckIn,
+    Estatus
+FROM dbo.Asistencia WITH (UPDLOCK, HOLDLOCK)
+WHERE NumeroEmpleadoEntrante = @NumeroUsuario
+  AND Estatus = @EstatusEnTurno
+  AND FechaHoraCheckOut IS NULL
+ORDER BY
+    FechaHoraCheckIn DESC,
+    AsistenciaId DESC;";
+
+
+                AsistenciaActivaCheckOutDto? asistencia =
+                    await conn
+                        .QueryFirstOrDefaultAsync
+                            <AsistenciaActivaCheckOutDto>(
+                                new CommandDefinition(
+                                    sqlAsistencia,
+                                    new
+                                    {
+                                        NumeroUsuario =
+                                            numeroUsuario.Trim(),
+
+                                        EstatusEnTurno =
+                                            ESTATUS_EN_TURNO
+                                    },
+                                    transaction,
+                                    cancellationToken: ct));
+
+
+                if (asistencia == null)
+                {
+                    transaction.Rollback();
+
+                    transaction =
+                        null;
+
+
+                    response.isSuccess = false;
+                    response.code = 404;
+                    response.message =
+                        "El empleado no tiene una asistencia activa para realizar Check-Out.";
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                // ====================================================
+                // 4. CHECK-OUT DIRECTO
+                // ====================================================
+
+                const string sqlCheckOut = @"
+UPDATE dbo.Asistencia
+SET
+    FechaHoraCheckOut = @FechaHoraCheckOut,
+    Estatus = @EstatusFinalizada
+WHERE AsistenciaId = @AsistenciaId
+  AND Estatus = @EstatusEnTurno
+  AND FechaHoraCheckOut IS NULL;";
+
+
+                int rows =
+                    await conn.ExecuteAsync(
+                        new CommandDefinition(
+                            sqlCheckOut,
+                            new
+                            {
+                                FechaHoraCheckOut =
+                                    fechaHoraActual,
+
+                                EstatusFinalizada =
+                                    ESTATUS_FINALIZADA,
+
+                                asistencia.AsistenciaId,
+
+                                EstatusEnTurno =
+                                    ESTATUS_EN_TURNO
+                            },
+                            transaction,
+                            cancellationToken: ct));
+
+
+                if (rows != 1)
+                {
+                    transaction.Rollback();
+
+                    transaction =
+                        null;
+
+
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "La asistencia cambió de estado antes de completar el Check-Out.";
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                // ====================================================
+                // 5. COMMIT
+                // ====================================================
+
+                transaction.Commit();
+
+                transaction =
+                    null;
+
+
+                // ====================================================
+                // 6. RESPONSE
+                // ====================================================
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message =
+                    "Check-Out registrado correctamente.";
+                response.desc =
+                    "El Check-Out se realizó directamente por pertenecer al rol Oficina.";
+
+
+                response.data =
+                    new CheckOutResponse
+                    {
+                        AsistenciaId =
+                            asistencia.AsistenciaId,
+
+                        ServicioId =
+                            asistencia.ServicioId,
+
+                        ServicioEmpleadoId =
+                            asistencia.ServicioEmpleadoId,
+
+                        NumeroEmpleado =
+                            numeroUsuario.Trim(),
+
+                        FechaTurno =
+                            asistencia.FechaTurno,
+
+                        FechaHoraEntradaProgramada =
+                            asistencia
+                                .FechaHoraEntradaProgramada,
+
+                        FechaHoraSalidaProgramada =
+                            asistencia
+                                .FechaHoraSalidaProgramada,
+
+                        FechaHoraCheckIn =
+                            asistencia.FechaHoraCheckIn,
+
+                        FechaHoraCheckOut =
+                            fechaHoraActual,
+
+                        Estatus =
+                            ESTATUS_FINALIZADA,
+
+                        EstatusDescripcion =
+                            "Finalizada"
+                    };
+
+
+                return response;
+            }
+            catch (SqlException ex)
+            {
+                try
+                {
+                    transaction?.Rollback();
+                }
+                catch
+                {
+                }
+
+
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error SQL al registrar el Check-Out.";
+                response.desc =
+                    ex.Message;
+                response.data = null;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    transaction?.Rollback();
+                }
+                catch
+                {
+                }
+
+
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error al registrar el Check-Out.";
+                response.desc =
+                    ex.Message;
+                response.data = null;
+
+                return response;
+            }
+        }
+
+
+        // ============================================================
+        // CHECK-IN APERTURA
         // ============================================================
 
         private async Task<ResponseModel<CheckInResponse>>
@@ -315,10 +568,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     conn.BeginTransaction();
 
 
-                // ====================================================
-                // DUPLICADO
-                // ====================================================
-
                 bool existe =
                     await ExisteAsistenciaAsync(
                         conn,
@@ -343,12 +592,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // REGISTRAR ASISTENCIA
-                //
-                // ESTATUS 1 = EN TURNO
-                // ====================================================
-
                 long asistenciaId =
                     await InsertarAsistenciaAsync(
                         conn,
@@ -366,10 +609,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         fechaHoraActual,
                         ct);
 
-
-                // ====================================================
-                // RETARDO
-                // ====================================================
 
                 long? incidenciaRetardoId =
                     null;
@@ -400,6 +639,8 @@ namespace CerberusBusinessService.Functions.Asistencias
                     "Check-In registrado correctamente.";
                 response.desc =
                     "El empleado quedó registrado en turno.";
+
+
                 response.data =
                     CrearCheckInResponse(
                         asistenciaId,
@@ -435,31 +676,7 @@ namespace CerberusBusinessService.Functions.Asistencias
 
 
         // ============================================================
-        // CHECK-IN CON RELEVO CONTINUO
-        // ============================================================
-        //
-        // Servicio:
-        //
-        // 00:00 -> 00:00 T+1
-        //
-        // Requiere:
-        //
-        // - empleado saliente
-        // - relevo
-        // - ETO6
-        // - firmas
-        // - fotografía
-        //
-        // Resguardo:
-        //
-        // - PUEDE VENIR NULL
-        // - PUEDE VENIR VACÍO
-        //
-        // Al finalizar:
-        //
-        // Estatus 3 = Pendiente autorizar
-        //
-        // y se notifica a los supervisores del servicio.
+        // CHECK-IN RELEVO CONTINUO
         // ============================================================
 
         private async Task<ResponseModel<CheckInResponse>>
@@ -493,12 +710,6 @@ namespace CerberusBusinessService.Functions.Asistencias
 
             try
             {
-                // ====================================================
-                // 1. VALIDAR CAMPOS DE RELEVO
-                //
-                // RESGUARDO NO SE VALIDA COMO OBLIGATORIO.
-                // ====================================================
-
                 string? error =
                     ValidarRequestRelevo(data);
 
@@ -536,10 +747,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 2. VALIDAR QUE EL SALIENTE EXISTA
-                // ====================================================
-
                 bool salienteExiste =
                     await ExisteEmpleadoAsync(
                         conn,
@@ -558,11 +765,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
-                // ====================================================
-                // 3. VALIDAR QUE EL SALIENTE ESTÉ EN TURNO
-                //    EN ESTE MISMO SERVICIO
-                // ====================================================
 
                 bool salienteEnTurno =
                     await ExisteEmpleadoSalienteEnTurnoAsync(
@@ -584,19 +786,11 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 4. CONTROL DE HORA / RETARDO
-                // ====================================================
-
                 var controlHora =
                     CalcularHoraCheckIn(
                         entradaProgramada,
                         fechaHoraActual);
 
-
-                // ====================================================
-                // 5. DUPLICADO ANTES DE SUBIR ARCHIVOS
-                // ====================================================
 
                 bool duplicadoPrevio =
                     await ExisteAsistenciaAsync(
@@ -619,10 +813,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
-                // ====================================================
-                // 6. SUBIR FIRMA ENTRANTE
-                // ====================================================
 
                 string operacionId =
                     Guid.NewGuid()
@@ -648,10 +838,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 7. SUBIR FIRMA SALIENTE
-                // ====================================================
-
                 var firmaSaliente =
                     await SubirArchivoAsync(
                         data.Formulario
@@ -676,10 +862,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 8. FOTO DE ZONA
-                // ====================================================
-
                 var fotoZona =
                     await SubirArchivoAsync(
                         data.Formulario.Foto!,
@@ -703,18 +885,7 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 9. RESGUARDOS OPCIONALES
-                // ====================================================
-                //
-                // No se valida que existan.
-                //
-                // null   -> válido
-                // []     -> válido
-                //
-                // Si llegan elementos, se procesan.
-                // ====================================================
-
+                // RESGUARDO ES OPCIONAL.
                 List<ResguardoCheckInRequest> resguardos =
                     data.Resguardo
                     ?? new List<ResguardoCheckInRequest>();
@@ -727,12 +898,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 foreach (var item
                          in resguardos)
                 {
-                    /*
-                     * Tampoco obligamos a que el resguardo
-                     * tenga fotografía desde este método.
-                     *
-                     * Si viene foto, se almacena.
-                     */
                     if (item.Foto != null &&
                         item.Foto.Length > 0)
                     {
@@ -770,17 +935,9 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 10. TRANSACCIÓN
-                // ====================================================
-
                 transaction =
                     conn.BeginTransaction();
 
-
-                // ====================================================
-                // 11. VALIDACIÓN DUPLICADO CON LOCK
-                // ====================================================
 
                 bool duplicado =
                     await ExisteAsistenciaAsync(
@@ -796,8 +953,7 @@ namespace CerberusBusinessService.Functions.Asistencias
                 {
                     transaction.Rollback();
 
-                    transaction =
-                        null;
+                    transaction = null;
 
 
                     await LimpiarArchivosAsync(
@@ -814,12 +970,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
-                // ====================================================
-                // 12. ASISTENCIA
-                //
-                // ESTATUS 3 = PENDIENTE AUTORIZAR
-                // ====================================================
 
                 long asistenciaId =
                     await InsertarAsistenciaAsync(
@@ -839,10 +989,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         ct);
 
 
-                // ====================================================
-                // 13. ETO6 / FORMATO DE ENTRADA
-                // ====================================================
-
                 await InsertarFormatoEntradaAsync(
                     conn,
                     transaction,
@@ -851,10 +997,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     fechaHoraActual,
                     ct);
 
-
-                // ====================================================
-                // 14. FORMULARIO
-                // ====================================================
 
                 await InsertarFormularioAsync(
                     conn,
@@ -868,10 +1010,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     ct);
 
 
-                // ====================================================
-                // 15. RESGUARDOS OPCIONALES
-                // ====================================================
-
                 if (resguardos.Count > 0)
                 {
                     await InsertarResguardosAsync(
@@ -884,10 +1022,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         ct);
                 }
 
-
-                // ====================================================
-                // 16. INCIDENCIA RETARDO
-                // ====================================================
 
                 long? incidenciaRetardoId =
                     null;
@@ -909,22 +1043,12 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
-                // ====================================================
-                // 17. COMMIT
-                // ====================================================
-
                 transaction.Commit();
 
-                transaction =
-                    null;
+                transaction = null;
 
-                commitRealizado =
-                    true;
+                commitRealizado = true;
 
-
-                // ====================================================
-                // 18. RESPONSE
-                // ====================================================
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -932,6 +1056,8 @@ namespace CerberusBusinessService.Functions.Asistencias
                     "Check-In registrado correctamente.";
                 response.desc =
                     "La asistencia quedó pendiente de autorización.";
+
+
                 response.data =
                     CrearCheckInResponse(
                         asistenciaId,
@@ -949,10 +1075,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         "Pendiente autorizar");
 
 
-                // ====================================================
-                // 19. PAYLOAD DE NOTIFICACIÓN
-                // ====================================================
-
                 var resguardosNotificacion =
                     resguardos
                         .Select(
@@ -960,16 +1082,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                                 new
                                 {
                                     item.IdObjeto,
-
                                     item.Cantidad,
-
-                                    Identificador =
-                                        item.Identificador,
-
+                                    item.Identificador,
                                     item.IdEstado,
-
-                                    Observaciones =
-                                        item.Observaciones,
+                                    item.Observaciones,
 
                                     RutaFoto =
                                         fotosResguardo[index]
@@ -1075,12 +1191,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     };
 
 
-                // ====================================================
-                // 20. NOTIFICACIÓN A SUPERVISORES
-                //
-                // SIEMPRE DESPUÉS DEL COMMIT
-                // ====================================================
-
                 try
                 {
                     var notificationResponse =
@@ -1112,11 +1222,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
                 catch (Exception ex)
                 {
-                    /*
-                     * NO se revierte la asistencia.
-                     *
-                     * El COMMIT ya ocurrió.
-                     */
                     response.desc =
                         "La asistencia quedó pendiente de autorización, " +
                         "pero ocurrió un error al enviar la notificación: " +
@@ -1147,6 +1252,23 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                 throw;
             }
+        }
+
+
+        // ============================================================
+        // FECHA SERVIDOR
+        // ============================================================
+
+        private async Task<DateTime>
+            ObtenerFechaServidorAsync(
+                SqlConnection conn,
+                CancellationToken ct)
+        {
+            return await conn
+                .ExecuteScalarAsync<DateTime>(
+                    new CommandDefinition(
+                        "SELECT SYSDATETIME();",
+                        cancellationToken: ct));
         }
 
 
@@ -1214,7 +1336,7 @@ WHERE UsuarioAsignado = @NumeroUsuario;";
 
 
         // ============================================================
-        // VALIDAR EMPLEADO SALIENTE EN TURNO
+        // EMPLEADO SALIENTE EN TURNO
         // ============================================================
 
         private async Task<bool>
@@ -1256,7 +1378,7 @@ WHERE ServicioId = @ServicioId
 
 
         // ============================================================
-        // OBTENER TURNO DEL EMPLEADO
+        // OBTENER TURNO
         // ============================================================
 
         private async Task<(
@@ -1277,19 +1399,6 @@ WHERE ServicioId = @ServicioId
             DateTime ayer =
                 hoy.AddDays(-1);
 
-
-            /*
-             * No filtramos TipoAsignacionServicioId.
-             *
-             * Un empleado puede llegar por:
-             *
-             * 1 regular
-             * 2 falta
-             * 3 cobertura
-             *
-             * Si la asignación pertenece al empleado,
-             * debe poder realizar Check-In.
-             */
 
             const string sql = @"
 SELECT
@@ -1317,30 +1426,27 @@ ORDER BY
 
 
             IEnumerable<ServicioEmpleadoCheckInDto> result =
-                await conn.QueryAsync<ServicioEmpleadoCheckInDto>(
-                    new CommandDefinition(
-                        sql,
-                        new
-                        {
-                            EmpleadoId =
-                                empleadoId,
+                await conn
+                    .QueryAsync<ServicioEmpleadoCheckInDto>(
+                        new CommandDefinition(
+                            sql,
+                            new
+                            {
+                                EmpleadoId =
+                                    empleadoId,
 
-                            Hoy =
-                                hoy,
+                                Hoy =
+                                    hoy,
 
-                            Ayer =
-                                ayer
-                        },
-                        cancellationToken: ct));
+                                Ayer =
+                                    ayer
+                            },
+                            cancellationToken: ct));
 
 
             List<ServicioEmpleadoCheckInDto> asignaciones =
                 result.ToList();
 
-
-            // ========================================================
-            // 1. TURNO ACTIVO
-            // ========================================================
 
             var activos =
                 new List<(
@@ -1373,12 +1479,14 @@ ORDER BY
 
                     DateTime entrada =
                         fecha.Date
-                            .Add(asignacion.HoraEntrada);
+                            .Add(
+                                asignacion.HoraEntrada);
 
 
                     DateTime salida =
                         fecha.Date
-                            .Add(asignacion.HoraSalida);
+                            .Add(
+                                asignacion.HoraSalida);
 
 
                     if (asignacion.SalidaDiaSiguiente)
@@ -1426,10 +1534,6 @@ ORDER BY
                 );
             }
 
-
-            // ========================================================
-            // 2. PRÓXIMO TURNO DE HOY
-            // ========================================================
 
             var proximos =
                 new List<(
@@ -1509,7 +1613,7 @@ ORDER BY
 
 
         // ============================================================
-        // HORARIO OPERATIVO DEL SERVICIO
+        // HORARIO DEL SERVICIO
         // ============================================================
 
         private async Task<ServicioHorarioCheckInDto?>
@@ -1574,7 +1678,7 @@ ORDER BY
 
 
         // ============================================================
-        // ATENCIÓN CONTINUA
+        // SERVICIO CONTINUO
         // ============================================================
 
         private bool EsServicioAtencionContinua(
@@ -1588,7 +1692,7 @@ ORDER BY
 
 
         // ============================================================
-        // DÍA DE SEMANA
+        // DÍA SEMANA
         // ============================================================
 
         private byte ObtenerDiaSemana(
@@ -1622,10 +1726,6 @@ ORDER BY
                 DateTime entradaProgramada,
                 DateTime fechaHoraActual)
         {
-            // ========================================================
-            // LLEGA ANTES
-            // ========================================================
-
             if (fechaHoraActual <
                 entradaProgramada)
             {
@@ -1635,10 +1735,6 @@ ORDER BY
                     null);
             }
 
-
-            // ========================================================
-            // TOLERANCIA 10 MINUTOS
-            // ========================================================
 
             DateTime limiteTolerancia =
                 entradaProgramada
@@ -1656,10 +1752,6 @@ ORDER BY
             }
 
 
-            // ========================================================
-            // RETARDO
-            // ========================================================
-
             int minutosRetardo =
                 (int)Math.Ceiling(
                     (
@@ -1676,7 +1768,7 @@ ORDER BY
 
 
         // ============================================================
-        // VALIDAR FECHA ASIGNACIÓN
+        // FECHA DENTRO DE ASIGNACIÓN
         // ============================================================
 
         private bool FechaDentroDeAsignacion(
@@ -1703,7 +1795,7 @@ ORDER BY
 
 
         // ============================================================
-        // DUPLICADO
+        // EXISTE ASISTENCIA
         // ============================================================
 
         private async Task<bool>
@@ -1859,7 +1951,7 @@ VALUES
 
 
         // ============================================================
-        // INSERT FORMATO ENTRADA
+        // FORMATO ENTRADA
         // ============================================================
 
         private async Task InsertarFormatoEntradaAsync(
@@ -1936,7 +2028,7 @@ VALUES
 
 
         // ============================================================
-        // INSERT FORMULARIO
+        // FORMULARIO
         // ============================================================
 
         private async Task InsertarFormularioAsync(
@@ -2006,7 +2098,7 @@ VALUES
 
 
         // ============================================================
-        // INSERT RESGUARDOS
+        // RESGUARDOS OPCIONALES
         // ============================================================
 
         private async Task InsertarResguardosAsync(
@@ -2082,7 +2174,7 @@ VALUES
 
 
         // ============================================================
-        // INCIDENCIA DE RETARDO
+        // RETARDO
         // ============================================================
 
         private async Task<long>
@@ -2198,7 +2290,7 @@ VALUES
 
 
         // ============================================================
-        // R2 - SUBIR
+        // R2
         // ============================================================
 
         private async Task<ResponseModel<string>>
@@ -2235,10 +2327,6 @@ VALUES
         }
 
 
-        // ============================================================
-        // R2 - LIMPIAR
-        // ============================================================
-
         private async Task LimpiarArchivosAsync(
             IEnumerable<string> archivos,
             CancellationToken ct)
@@ -2255,17 +2343,10 @@ VALUES
                 }
                 catch
                 {
-                    /*
-                     * Nunca sustituir el error original.
-                     */
                 }
             }
         }
 
-
-        // ============================================================
-        // ERROR ARCHIVO
-        // ============================================================
 
         private ResponseModel<CheckInResponse>
             ErrorArchivo(
@@ -2295,14 +2376,7 @@ VALUES
         // VALIDAR RELEVO
         // ============================================================
         //
-        // IMPORTANTE:
-        //
-        // RESGUARDO NO ES OBLIGATORIO.
-        //
-        // No existe ninguna validación:
-        //
-        // data.Resguardo == null  -> válido
-        // data.Resguardo.Count=0  -> válido
+        // RESGUARDO SIGUE SIENDO OPCIONAL.
         // ============================================================
 
         private string? ValidarRequestRelevo(
@@ -2376,17 +2450,12 @@ VALUES
             }
 
 
-            /*
-             * DELIBERADAMENTE NO SE VALIDA RESGUARDO.
-             */
-
-
             return null;
         }
 
 
         // ============================================================
-        // RESPONSE
+        // RESPONSE CHECK-IN
         // ============================================================
 
         private CheckInResponse CrearCheckInResponse(
