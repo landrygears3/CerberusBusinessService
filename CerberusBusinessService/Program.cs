@@ -1,15 +1,16 @@
 using Amazon.S3;
 using CerberusBusinessService.DataSecure;
 using CerberusBusinessService.Functions;
+using CerberusBusinessService.Functions.Asistencias;
 using CerberusBusinessService.Functions.Candidatos;
 using CerberusBusinessService.Functions.Contratacion;
+using CerberusBusinessService.Functions.Notificaciones;
 using CerberusBusinessService.Functions.R2;
+using CerberusBusinessService.Functions.Supervision;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
-using CerberusBusinessService.Models.R2;
-using CerberusBusinessService.Functions.Asistencias;
-using CerberusBusinessService.Functions.Notificaciones;
 using CerberusBusinessService.Models.Notificaciones;
+using CerberusBusinessService.Models.R2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -78,6 +79,7 @@ builder.Services.AddScoped<CandidatosFunctions>();
 builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddScoped<NotificationClient>();
 builder.Services.AddScoped<ServicioNotificationFunctions>();
+builder.Services.AddScoped<SupervisionFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
