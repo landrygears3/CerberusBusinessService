@@ -1711,11 +1711,11 @@ ORDER BY
 
 
         private async Task<ServicioHorarioCheckInDto?>
-            ObtenerHorarioServicioAsync(
-                SqlConnection conn,
-                int servicioId,
-                DateTime fechaTurno,
-                CancellationToken ct)
+           ObtenerHorarioServicioAsync(
+               SqlConnection conn,
+               int servicioId,
+               DateTime fechaTurno,
+               CancellationToken ct)
         {
             byte diaSemana =
                 ObtenerDiaSemana(
@@ -1723,32 +1723,28 @@ ORDER BY
 
             const string sql = @"
 SELECT TOP (1)
-    IdServicioHorario,
-    IdServicio,
+    ServicioHorarioId AS IdServicioHorario,
+    ServicioId AS IdServicio,
     DiaSemana,
     HoraInicio,
     HoraFin,
     CruzaDia,
-    Activo,
-    VigenteDesde,
-    VigenteHasta
-FROM dbo.Servicio_Horarios
-WHERE IdServicio = @ServicioId
+    Estatus AS Activo,
+    FechaInicioVigencia AS VigenteDesde,
+    FechaFinVigencia AS VigenteHasta
+FROM dbo.Servicios_Horarios
+WHERE ServicioId = @ServicioId
   AND DiaSemana = @DiaSemana
-  AND Activo = 1
+  AND Estatus = 1
+  AND FechaInicioVigencia <= @Fecha
   AND
   (
-      VigenteDesde IS NULL
-      OR VigenteDesde <= @Fecha
-  )
-  AND
-  (
-      VigenteHasta IS NULL
-      OR VigenteHasta >= @Fecha
+      FechaFinVigencia IS NULL
+      OR FechaFinVigencia >= @Fecha
   )
 ORDER BY
-    VigenteDesde DESC,
-    IdServicioHorario DESC;";
+    FechaInicioVigencia DESC,
+    ServicioHorarioId DESC;";
 
             return await conn
                 .QueryFirstOrDefaultAsync<ServicioHorarioCheckInDto>(
@@ -1767,7 +1763,6 @@ ORDER BY
                         },
                         cancellationToken: ct));
         }
-
 
         private bool EsServicioAtencionContinua(
             ServicioHorarioCheckInDto horario)
