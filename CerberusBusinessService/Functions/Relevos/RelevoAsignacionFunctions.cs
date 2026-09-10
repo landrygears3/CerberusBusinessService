@@ -1,6 +1,7 @@
 ﻿using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Relevos;
+using CerberusBusinessService.Functions.Notificaciones;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
@@ -49,7 +50,7 @@ namespace CerberusBusinessService.Functions.Relevos
 
 
         #region PROPIEDADES
-
+        private readonly RelevoNotificationFunctions _relevoNotificationFunctions;
         private readonly RelevoNoPlaneadoDataService _data;
         private readonly RelevoIntegracionAsistenciaFunctions _integracion;
         private readonly FileRelevoNoPlaneadoService _fileRelevoService;
@@ -62,11 +63,13 @@ namespace CerberusBusinessService.Functions.Relevos
         public RelevoAsignacionFunctions(
             RelevoNoPlaneadoDataService data,
             RelevoIntegracionAsistenciaFunctions integracion,
-            FileRelevoNoPlaneadoService fileRelevoService)
+            FileRelevoNoPlaneadoService fileRelevoService,
+            RelevoNotificationFunctions relevoNotificationFunctions)
         {
             _data = data;
             _integracion = integracion;
             _fileRelevoService = fileRelevoService;
+            _relevoNotificationFunctions = relevoNotificationFunctions;
         }
 
         #endregion
@@ -78,6 +81,7 @@ namespace CerberusBusinessService.Functions.Relevos
             CrearAsignacionAsync(
                 CrearAsignacionRelevoNoPlaneadoDto data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -130,9 +134,9 @@ namespace CerberusBusinessService.Functions.Relevos
                         ct,
                         transaction);
 
-                // ====================================================
+                // ============================================================
                 // SOLICITUD
-                // ====================================================
+                // ============================================================
 
                 SolicitudRelevoNoPlaneadoDto? solicitud =
                     await _data.ObtenerSolicitudForUpdateAsync(
@@ -181,9 +185,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // EVITAR PROPUESTAS ACTIVAS SIMULTANEAS
-                // ====================================================
+                // ============================================================
 
                 bool existeAsignacionActiva =
                     await _data.ExisteAsignacionActivaAsync(
@@ -206,9 +210,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // ASIGNACION AFECTADA
-                // ====================================================
+                // ============================================================
 
                 ServicioEmpleadoRelevoDto? asignacionAfectada =
                     await _data.ObtenerServicioEmpleadoAsync(
@@ -231,9 +235,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // EMPLEADO PROPUESTO
-                // ====================================================
+                // ============================================================
 
                 EmpleadoRelevoDto? empleadoAsignado =
                     await _data.ObtenerEmpleadoAsync(
@@ -271,9 +275,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // REGLAS DEL TIPO DE COBERTURA
-                // ====================================================
+                // ============================================================
 
                 string? errorTipo =
                     await ValidarReglasTipoCoberturaAsync(
@@ -299,9 +303,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // TIPO DE COBERTURA
-                // ====================================================
+                // ============================================================
 
                 int? tipoCoberturaId =
                     await _data.ObtenerTipoCoberturaIdAsync(
@@ -324,9 +328,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // ESTATUS INICIAL
-                // ====================================================
+                // ============================================================
 
                 string estatusAsignacionClave =
                     tipoCoberturaClave == "EXTENSION"
@@ -375,9 +379,9 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // RESPONSIVA
-                // ====================================================
+                // ============================================================
 
                 string textoResponsiva =
                     GenerarTextoResponsiva(
@@ -386,9 +390,9 @@ namespace CerberusBusinessService.Functions.Relevos
                         solicitud.FechaHoraInicioCobertura,
                         solicitud.FechaHoraFinCobertura);
 
-                // ====================================================
+                // ============================================================
                 // INSERTAR PROPUESTA
-                // ====================================================
+                // ============================================================
 
                 const string sqlInsert = @"
 INSERT INTO dbo.RelevoNoPlaneadoAsignacion
@@ -441,9 +445,9 @@ VALUES
                             transaction,
                             cancellationToken: ct));
 
-                // ====================================================
+                // ============================================================
                 // SOLICITUD -> EN_PROCESO
-                // ====================================================
+                // ============================================================
 
                 const string sqlUpdateSolicitud = @"
 UPDATE dbo.SolicitudRelevoNoPlaneado
@@ -490,6 +494,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
 
                     return response;
                 }
+
+                // ============================================================
+                // COMMIT
+                // ============================================================
 
                 transaction.Commit();
                 transaction = null;
@@ -557,6 +565,81 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                             numeroUsuario.Trim()
                     };
 
+                // ============================================================
+                // NOTIFICACION
+                //
+                // SI FALLA, LA ASIGNACION YA ESTA COMMITTEADA.
+                // ============================================================
+
+                try
+                {
+                    if (tipoCoberturaClave == "EXTENSION")
+                    {
+                        var notificationResponse =
+                            await _relevoNotificationFunctions
+                                .NotificarExtensionPendienteAutorizacionAsync(
+                                    asignacionAfectada.ServicioId,
+                                    asignacionAfectada.NombreServicio,
+                                    solicitud.SolicitudRelevoNoPlaneadoId,
+                                    asignacionId,
+                                    empleadoAsignado.EmpleadoId,
+                                    empleadoAsignado.NumeroUsuario,
+                                    empleadoAsignado.NombreCompleto,
+                                    solicitud.FechaHoraInicioCobertura,
+                                    solicitud.FechaHoraFinCobertura,
+                                    textoResponsiva,
+                                    accessToken,
+                                    ct);
+
+                        if (notificationResponse.isSuccess)
+                        {
+                            response.desc +=
+                                " Se notificó a los supervisores del servicio.";
+                        }
+                        else
+                        {
+                            response.desc +=
+                                " No fue posible notificar a los supervisores. " +
+                                notificationResponse.message;
+                        }
+                    }
+                    else
+                    {
+                        var notificationResponse =
+                            await _relevoNotificationFunctions
+                                .NotificarAsignacionPendienteFirmaEmpleadoAsync(
+                                    empleadoAsignado.NumeroUsuario,
+                                    asignacionAfectada.ServicioId,
+                                    asignacionAfectada.NombreServicio,
+                                    solicitud.SolicitudRelevoNoPlaneadoId,
+                                    asignacionId,
+                                    tipoCoberturaClave,
+                                    solicitud.FechaHoraInicioCobertura,
+                                    solicitud.FechaHoraFinCobertura,
+                                    textoResponsiva,
+                                    accessToken,
+                                    ct);
+
+                        if (notificationResponse.isSuccess)
+                        {
+                            response.desc +=
+                                " Se notificó al empleado asignado.";
+                        }
+                        else
+                        {
+                            response.desc +=
+                                " No fue posible notificar al empleado asignado. " +
+                                notificationResponse.message;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.desc +=
+                        " La propuesta fue creada, pero ocurrió un error al enviar la notificación: " +
+                        ex.Message;
+                }
+
                 return response;
             }
             catch (SqlException ex)
@@ -608,6 +691,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
             AsignarEmpleadoAsync(
                 AsignarEmpleadoRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             if (data == null)
@@ -661,6 +745,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
             return await CrearAsignacionAsync(
                 asignacion,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -673,6 +758,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
             AsignarseSupervisorAsync(
                 AsignarseSupervisorRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -756,6 +842,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                 return await CrearAsignacionAsync(
                     asignacion,
                     numeroUsuario.Trim(),
+                    accessToken,
                     ct);
             }
             catch (SqlException ex)
@@ -791,6 +878,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
             CrearExtensionAsync(
                 long solicitudRelevoNoPlaneadoId,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -863,6 +951,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                 return await CrearAsignacionAsync(
                     asignacion,
                     numeroUsuario.Trim(),
+                    accessToken,
                     ct);
             }
             catch (SqlException ex)
@@ -898,6 +987,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
             AutorizarAsignacionAsync(
                 AutorizarAsignacionRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -953,19 +1043,21 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     return response;
                 }
 
+                numeroUsuario = numeroUsuario.Trim();
+
                 using var conn =
                     _data.CrearConexion();
 
                 await conn.OpenAsync(ct);
 
-                // ====================================================
+                // ============================================================
                 // SUPERVISOR AUTENTICADO
-                // ====================================================
+                // ============================================================
 
                 EmpleadoRelevoDto? supervisor =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
                         conn,
-                        numeroUsuario.Trim(),
+                        numeroUsuario,
                         ct);
 
                 if (supervisor == null)
@@ -979,9 +1071,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // PREVALIDACION
-                // ====================================================
+                // ============================================================
 
                 RelevoNoPlaneadoAsignacionDto? asignacion =
                     await _data.ObtenerAsignacionAsync(
@@ -1095,9 +1187,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // SUBIR FIRMA
-                // ====================================================
+                // ============================================================
 
                 string operacionId =
                     $"asignacion-{asignacion.RelevoNoPlaneadoAsignacionId}";
@@ -1124,9 +1216,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                 rutaFirmaSupervisor =
                     uploadResponse.data;
 
-                // ====================================================
+                // ============================================================
                 // TRANSACCION
-                // ====================================================
+                // ============================================================
 
                 transaction =
                     conn.BeginTransaction();
@@ -1338,7 +1430,7 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 AsignacionId =
                                     asignacion.RelevoNoPlaneadoAsignacionId,
@@ -1367,6 +1459,10 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                 asignacion.FechaHoraFirmaSupervisor =
                     fechaActual;
 
+                // ============================================================
+                // COMMIT
+                // ============================================================
+
                 transaction.Commit();
                 transaction = null;
 
@@ -1380,6 +1476,63 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                     "La propuesta quedó pendiente de firma y aceptación del empleado.";
                 response.data =
                     asignacion;
+
+                // ============================================================
+                // NOTIFICAR EMPLEADO
+                //
+                // LA AUTORIZACION YA FUE COMMITTEADA.
+                // ============================================================
+
+                try
+                {
+                    EmpleadoRelevoDto? empleadoAsignado =
+                        await _data.ObtenerEmpleadoAsync(
+                            conn,
+                            asignacion.EmpleadoIdAsignado,
+                            ct);
+
+                    if (empleadoAsignado == null ||
+                        string.IsNullOrWhiteSpace(
+                            empleadoAsignado.NumeroUsuario))
+                    {
+                        response.desc +=
+                            " No fue posible identificar al empleado para enviar la notificación.";
+                    }
+                    else
+                    {
+                        var notificationResponse =
+                            await _relevoNotificationFunctions
+                                .NotificarExtensionPendienteFirmaEmpleadoAsync(
+                                    empleadoAsignado.NumeroUsuario,
+                                    servicioAfectado.ServicioId,
+                                    servicioAfectado.NombreServicio,
+                                    solicitud.SolicitudRelevoNoPlaneadoId,
+                                    asignacion.RelevoNoPlaneadoAsignacionId,
+                                    solicitud.FechaHoraInicioCobertura,
+                                    solicitud.FechaHoraFinCobertura,
+                                    asignacion.TextoResponsiva,
+                                    accessToken,
+                                    ct);
+
+                        if (notificationResponse.isSuccess)
+                        {
+                            response.desc +=
+                                " Se notificó al empleado.";
+                        }
+                        else
+                        {
+                            response.desc +=
+                                " No fue posible notificar al empleado. " +
+                                notificationResponse.message;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.desc +=
+                        " La autorización se completó, pero ocurrió un error al enviar la notificación: " +
+                        ex.Message;
+                }
 
                 return response;
             }
@@ -1440,6 +1593,7 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
             FirmarResponsivaAsync(
                 FirmarResponsivaRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -1495,19 +1649,21 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                     return response;
                 }
 
+                numeroUsuario = numeroUsuario.Trim();
+
                 using var conn =
                     _data.CrearConexion();
 
                 await conn.OpenAsync(ct);
 
-                // ====================================================
+                // ============================================================
                 // EMPLEADO AUTENTICADO
-                // ====================================================
+                // ============================================================
 
                 EmpleadoRelevoDto? empleado =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
                         conn,
-                        numeroUsuario.Trim(),
+                        numeroUsuario,
                         ct);
 
                 if (empleado == null)
@@ -1521,9 +1677,9 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // PREVALIDACION
-                // ====================================================
+                // ============================================================
 
                 RelevoNoPlaneadoAsignacionDto? asignacion =
                     await _data.ObtenerAsignacionAsync(
@@ -1652,9 +1808,9 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // SUBIR FIRMA
-                // ====================================================
+                // ============================================================
 
                 string operacionId =
                     $"asignacion-{asignacion.RelevoNoPlaneadoAsignacionId}";
@@ -1681,9 +1837,9 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                 rutaFirmaAceptacion =
                     uploadResponse.data;
 
-                // ====================================================
+                // ============================================================
                 // TRANSACCION
-                // ====================================================
+                // ============================================================
 
                 transaction =
                     conn.BeginTransaction();
@@ -1798,9 +1954,9 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                         "No está configurado el tipo de asignación FALTA.");
                 }
 
-                // ====================================================
+                // ============================================================
                 // SERVICIO EMPLEADO TEMPORAL
-                // ====================================================
+                // ============================================================
 
                 long servicioEmpleadoTemporalId =
                     await _integracion
@@ -1812,12 +1968,12 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                             empleado,
                             tipoAsignacionFaltaId.Value,
                             fechaActual,
-                            numeroUsuario.Trim(),
+                            numeroUsuario,
                             ct);
 
-                // ====================================================
+                // ============================================================
                 // EXTENSION
-                // ====================================================
+                // ============================================================
 
                 if (string.Equals(
                     tipoCobertura,
@@ -1833,13 +1989,13 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                             servicioEmpleadoTemporalId,
                             empleado,
                             fechaActual,
-                            numeroUsuario.Trim(),
+                            numeroUsuario,
                             ct);
                 }
 
-                // ====================================================
+                // ============================================================
                 // ASIGNACION -> ACEPTADA
-                // ====================================================
+                // ============================================================
 
                 int? estatusAceptadaId =
                     await _data.ObtenerEstatusAsignacionIdAsync(
@@ -1891,7 +2047,7 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 AsignacionId =
                                     asignacion.RelevoNoPlaneadoAsignacionId,
@@ -1908,9 +2064,9 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                         "La propuesta cambió antes de completar la aceptación.");
                 }
 
-                // ====================================================
+                // ============================================================
                 // SOLICITUD -> CUBIERTO
-                // ====================================================
+                // ============================================================
 
                 int? estatusCubiertoId =
                     await _data.ObtenerEstatusSolicitudIdAsync(
@@ -1947,7 +2103,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 SolicitudId =
                                     solicitud.SolicitudRelevoNoPlaneadoId,
@@ -1963,6 +2119,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     throw new InvalidOperationException(
                         "La solicitud cambió antes de completar la cobertura.");
                 }
+
+                // ============================================================
+                // COMMIT
+                // ============================================================
 
                 transaction.Commit();
                 transaction = null;
@@ -2007,6 +2167,50 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
                 response.data =
                     asignacion;
+
+                // ============================================================
+                // NOTIFICAR COBERTURA ACEPTADA
+                //
+                // TODO LO OPERATIVO YA ESTA COMMITTEADO.
+                // ============================================================
+
+                try
+                {
+                    var notificationResponse =
+                        await _relevoNotificationFunctions
+                            .NotificarCoberturaAceptadaAsync(
+                                asignacionAfectada.ServicioId,
+                                asignacionAfectada.NombreServicio,
+                                solicitud.SolicitudRelevoNoPlaneadoId,
+                                asignacion.RelevoNoPlaneadoAsignacionId,
+                                servicioEmpleadoTemporalId,
+                                tipoCobertura,
+                                empleado.EmpleadoId,
+                                empleado.NumeroUsuario,
+                                empleado.NombreCompleto,
+                                solicitud.FechaHoraInicioCobertura,
+                                solicitud.FechaHoraFinCobertura,
+                                accessToken,
+                                ct);
+
+                    if (notificationResponse.isSuccess)
+                    {
+                        response.desc +=
+                            " Se notificó a los supervisores del servicio.";
+                    }
+                    else
+                    {
+                        response.desc +=
+                            " No fue posible notificar a los supervisores. " +
+                            notificationResponse.message;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.desc +=
+                        " La cobertura fue registrada, pero ocurrió un error al enviar la notificación: " +
+                        ex.Message;
+                }
 
                 return response;
             }
@@ -2067,6 +2271,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
             RechazarAsignacionAsync(
                 RechazarAsignacionRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -2121,6 +2326,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
+                numeroUsuario = numeroUsuario.Trim();
+
                 using var conn =
                     _data.CrearConexion();
 
@@ -2138,7 +2345,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 EmpleadoRelevoDto? empleado =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
                         conn,
-                        numeroUsuario.Trim(),
+                        numeroUsuario,
                         ct,
                         transaction);
 
@@ -2278,9 +2485,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         "No fue posible determinar el tipo de cobertura.");
                 }
 
-                // ====================================================
+                // ============================================================
                 // EXTENSION RECHAZADA POR EMPLEADO -> CHECKOUT
-                // ====================================================
+                // ============================================================
 
                 if (string.Equals(
                     tipoCobertura,
@@ -2341,7 +2548,7 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 AsignacionId =
                                     asignacion.RelevoNoPlaneadoAsignacionId,
@@ -2393,7 +2600,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 SolicitudId =
                                     solicitud.SolicitudRelevoNoPlaneadoId,
@@ -2409,6 +2616,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     throw new InvalidOperationException(
                         "La solicitud cambió antes de completar el rechazo.");
                 }
+
+                // ============================================================
+                // COMMIT
+                // ============================================================
 
                 transaction.Commit();
                 transaction = null;
@@ -2437,6 +2648,60 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
                 response.data =
                     asignacion;
+
+                // ============================================================
+                // NOTIFICAR NUEVA NECESIDAD DE COBERTURA
+                // ============================================================
+
+                try
+                {
+                    ServicioEmpleadoRelevoDto? servicioAfectado =
+                        await _data.ObtenerServicioEmpleadoAsync(
+                            conn,
+                            solicitud.ServicioEmpleadoAfectadoId,
+                            ct);
+
+                    if (servicioAfectado == null)
+                    {
+                        response.desc +=
+                            " No fue posible obtener el servicio para enviar la notificación.";
+                    }
+                    else
+                    {
+                        var notificationResponse =
+                            await _relevoNotificationFunctions
+                                .NotificarCoberturaRequeridaPorRechazoAsync(
+                                    servicioAfectado.ServicioId,
+                                    servicioAfectado.NombreServicio,
+                                    solicitud.SolicitudRelevoNoPlaneadoId,
+                                    asignacion.RelevoNoPlaneadoAsignacionId,
+                                    tipoCobertura,
+                                    "EMPLEADO",
+                                    data.MotivoRechazo.Trim(),
+                                    solicitud.FechaHoraInicioCobertura,
+                                    solicitud.FechaHoraFinCobertura,
+                                    accessToken,
+                                    ct);
+
+                        if (notificationResponse.isSuccess)
+                        {
+                            response.desc +=
+                                " Se notificó a los supervisores que se requiere una nueva cobertura.";
+                        }
+                        else
+                        {
+                            response.desc +=
+                                " No fue posible enviar la notificación de nueva cobertura. " +
+                                notificationResponse.message;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.desc +=
+                        " El rechazo fue registrado, pero ocurrió un error al enviar la notificación: " +
+                        ex.Message;
+                }
 
                 return response;
             }
@@ -2489,6 +2754,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
             RechazarAsignacionSupervisorAsync(
                 RechazarAsignacionSupervisorRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -2543,6 +2809,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
+                numeroUsuario = numeroUsuario.Trim();
+
                 using var conn =
                     _data.CrearConexion();
 
@@ -2560,7 +2828,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 EmpleadoRelevoDto? supervisor =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
                         conn,
-                        numeroUsuario.Trim(),
+                        numeroUsuario,
                         ct,
                         transaction);
 
@@ -2753,8 +3021,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         "No está configurado el estatus RECHAZADA_SUPERVISOR.");
                 }
 
-                // IMPORTANTE:
-                // El supervisor NO realiza Check-Out aquí.
+                // ============================================================
+                // EL SUPERVISOR NO REALIZA CHECK-OUT AQUI
+                // ============================================================
 
                 const string sqlRechazar = @"
 UPDATE dbo.RelevoNoPlaneadoAsignacion
@@ -2790,7 +3059,7 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 AsignacionId =
                                     asignacion.RelevoNoPlaneadoAsignacionId,
@@ -2842,7 +3111,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                                     fechaActual,
 
                                 UsuarioModificacion =
-                                    numeroUsuario.Trim(),
+                                    numeroUsuario,
 
                                 SolicitudId =
                                     solicitud.SolicitudRelevoNoPlaneadoId,
@@ -2858,6 +3127,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     throw new InvalidOperationException(
                         "La solicitud cambió antes de completar el rechazo.");
                 }
+
+                // ============================================================
+                // COMMIT
+                // ============================================================
 
                 transaction.Commit();
                 transaction = null;
@@ -2879,6 +3152,46 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     "La solicitud quedó pendiente de una nueva asignación de cobertura.";
                 response.data =
                     asignacion;
+
+                // ============================================================
+                // NOTIFICAR NUEVA NECESIDAD DE COBERTURA
+                // ============================================================
+
+                try
+                {
+                    var notificationResponse =
+                        await _relevoNotificationFunctions
+                            .NotificarCoberturaRequeridaPorRechazoAsync(
+                                servicioAfectado.ServicioId,
+                                servicioAfectado.NombreServicio,
+                                solicitud.SolicitudRelevoNoPlaneadoId,
+                                asignacion.RelevoNoPlaneadoAsignacionId,
+                                tipoCobertura!,
+                                "SUPERVISOR",
+                                data.MotivoRechazo.Trim(),
+                                solicitud.FechaHoraInicioCobertura,
+                                solicitud.FechaHoraFinCobertura,
+                                accessToken,
+                                ct);
+
+                    if (notificationResponse.isSuccess)
+                    {
+                        response.desc +=
+                            " Se notificó a los supervisores que se requiere una nueva cobertura.";
+                    }
+                    else
+                    {
+                        response.desc +=
+                            " No fue posible enviar la notificación de nueva cobertura. " +
+                            notificationResponse.message;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.desc +=
+                        " El rechazo fue registrado, pero ocurrió un error al enviar la notificación: " +
+                        ex.Message;
+                }
 
                 return response;
             }

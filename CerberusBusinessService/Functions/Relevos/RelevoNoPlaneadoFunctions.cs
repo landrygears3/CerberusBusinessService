@@ -50,6 +50,7 @@ namespace CerberusBusinessService.Functions.Relevos
                 long asistenciaSalienteId,
                 bool realizarCheckOut,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _solicitudes
@@ -58,6 +59,7 @@ namespace CerberusBusinessService.Functions.Relevos
                     asistenciaSalienteId,
                     realizarCheckOut,
                     numeroUsuario,
+                    accessToken,
                     ct);
         }
 
@@ -67,6 +69,7 @@ namespace CerberusBusinessService.Functions.Relevos
                 long supervisionId,
                 string motivoRelevo,
                 string numeroSupervisor,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _solicitudes
@@ -74,6 +77,7 @@ namespace CerberusBusinessService.Functions.Relevos
                     supervisionId,
                     motivoRelevo,
                     numeroSupervisor,
+                    accessToken,
                     ct);
         }
 
@@ -99,11 +103,13 @@ namespace CerberusBusinessService.Functions.Relevos
             AsignarEmpleadoAsync(
                 AsignarEmpleadoRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones.AsignarEmpleadoAsync(
                 data,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -112,11 +118,13 @@ namespace CerberusBusinessService.Functions.Relevos
             AsignarseSupervisorAsync(
                 AsignarseSupervisorRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones.AsignarseSupervisorAsync(
                 data,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -125,11 +133,13 @@ namespace CerberusBusinessService.Functions.Relevos
             CrearExtensionAsync(
                 long solicitudRelevoNoPlaneadoId,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones.CrearExtensionAsync(
                 solicitudRelevoNoPlaneadoId,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -138,11 +148,13 @@ namespace CerberusBusinessService.Functions.Relevos
             AutorizarAsignacionAsync(
                 AutorizarAsignacionRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones.AutorizarAsignacionAsync(
                 data,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -151,11 +163,13 @@ namespace CerberusBusinessService.Functions.Relevos
             FirmarResponsivaAsync(
                 FirmarResponsivaRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones.FirmarResponsivaAsync(
                 data,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -164,11 +178,13 @@ namespace CerberusBusinessService.Functions.Relevos
             RechazarAsignacionAsync(
                 RechazarAsignacionRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones.RechazarAsignacionAsync(
                 data,
                 numeroUsuario,
+                accessToken,
                 ct);
         }
 
@@ -177,12 +193,14 @@ namespace CerberusBusinessService.Functions.Relevos
             RechazarAsignacionSupervisorAsync(
                 RechazarAsignacionSupervisorRelevoNoPlaneadoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _asignaciones
                 .RechazarAsignacionSupervisorAsync(
                     data,
                     numeroUsuario,
+                    accessToken,
                     ct);
         }
 

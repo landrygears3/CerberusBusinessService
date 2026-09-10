@@ -3,7 +3,6 @@ using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Functions.Relevos;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Asistencias;
-using CerberusBusinessService.Functions.Relevos;
 using CerberusBusinessService.Models.DTO.Relevos;
 using Dapper;
 using Microsoft.Data.SqlClient;
@@ -12,6 +11,8 @@ namespace CerberusBusinessService.Functions.Asistencias
 {
     public class AsistenciasFunctions
     {
+        #region CONSTANTES
+
         private const int MINUTOS_TOLERANCIA_RETARDO = 10;
 
         private const int ESTATUS_EN_TURNO = 1;
@@ -19,15 +20,25 @@ namespace CerberusBusinessService.Functions.Asistencias
         private const int ESTATUS_PENDIENTE_AUTORIZAR = 3;
         private const int ESTATUS_CANCELADA = 4;
 
+        #endregion
+
+
+        #region PROPIEDADES
 
         private readonly string _csCerberus;
 
-        private readonly FileAsistenciaService
-            _fileAsistenciaService;
+        private readonly FileAsistenciaService _fileAsistenciaService;
 
         private readonly ServicioNotificationFunctions
             _servicioNotificationFunctions;
-        private readonly RelevoNoPlaneadoFunctions _relevoNoPlaneadoFunctions;
+
+        private readonly RelevoNoPlaneadoFunctions
+            _relevoNoPlaneadoFunctions;
+
+        #endregion
+
+
+        #region CONSTRUCTOR
 
         public AsistenciasFunctions(
             IConfiguration config,
@@ -40,15 +51,20 @@ namespace CerberusBusinessService.Functions.Asistencias
                 ?? throw new InvalidOperationException(
                     "No existe la cadena DefaultConnection.");
 
-            _fileAsistenciaService = fileAsistenciaService;
-            _servicioNotificationFunctions = servicioNotificationFunctions;
-            _relevoNoPlaneadoFunctions = relevoNoPlaneadoFunctions;
+            _fileAsistenciaService =
+                fileAsistenciaService;
+
+            _servicioNotificationFunctions =
+                servicioNotificationFunctions;
+
+            _relevoNoPlaneadoFunctions =
+                relevoNoPlaneadoFunctions;
         }
 
+        #endregion
 
-        // ============================================================
-        // CHECK-IN
-        // ============================================================
+
+        #region CHECK-IN
 
         public async Task<ResponseModel<CheckInResponse>>
             ProcesarCheckIn(
@@ -60,15 +76,13 @@ namespace CerberusBusinessService.Functions.Asistencias
             ResponseModel<CheckInResponse> response =
                 new ResponseModel<CheckInResponse>();
 
-
             try
             {
                 // ====================================================
                 // 1. VALIDAR USUARIO
                 // ====================================================
 
-                if (string.IsNullOrWhiteSpace(
-                    numeroUsuario))
+                if (string.IsNullOrWhiteSpace(numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -78,7 +92,6 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                     return response;
                 }
-
 
                 // ====================================================
                 // 2. VALIDAR REQUEST
@@ -95,16 +108,14 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
                 // ====================================================
-                // 3. VALIDAR GEOLOCALIZACIÓN
+                // 3. VALIDAR GEOLOCALIZACION
                 // ====================================================
 
                 string? errorGeolocalizacion =
                     ValidarGeolocalizacion(
                         data.Latitud,
                         data.Longitud);
-
 
                 if (errorGeolocalizacion != null)
                 {
@@ -117,22 +128,16 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
                 double latitud =
                     data.Latitud!.Value;
-
 
                 double longitud =
                     data.Longitud!.Value;
 
-
                 using var conn =
-                    new SqlConnection(
-                        _csCerberus);
-
+                    new SqlConnection(_csCerberus);
 
                 await conn.OpenAsync(ct);
-
 
                 // ====================================================
                 // 4. FECHA ACTUAL DEL SERVIDOR
@@ -143,7 +148,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         conn,
                         ct);
 
-
                 // ====================================================
                 // 5. EMPLEADO DEL TOKEN
                 // ====================================================
@@ -153,7 +157,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         conn,
                         numeroUsuario,
                         ct);
-
 
                 if (empleado == null)
                 {
@@ -166,7 +169,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
                 // ====================================================
                 // 6. TURNO ASIGNADO
                 // ====================================================
@@ -177,7 +179,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         empleado.EmpleadoId,
                         fechaHoraActual,
                         ct);
-
 
                 if (turno == null)
                 {
@@ -190,22 +191,17 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
                 ServicioEmpleadoCheckInDto asignacion =
                     turno.Value.Asignacion;
-
 
                 DateTime fechaTurno =
                     turno.Value.FechaTurno;
 
-
                 DateTime entradaProgramada =
                     turno.Value.EntradaProgramada;
 
-
                 DateTime salidaProgramada =
                     turno.Value.SalidaProgramada;
-
 
                 // ====================================================
                 // 7. HORARIO DEL SERVICIO
@@ -218,7 +214,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         fechaTurno,
                         ct);
 
-
                 if (horarioServicio == null)
                 {
                     response.isSuccess = false;
@@ -230,7 +225,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
                 // ====================================================
                 // 8. DETERMINAR FLUJO
                 // ====================================================
@@ -238,7 +232,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 bool esRelevoContinuo =
                     EsServicioAtencionContinua(
                         horarioServicio);
-
 
                 // ====================================================
                 // 9. DISPATCHER
@@ -260,7 +253,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         accessToken,
                         ct);
                 }
-
 
                 return await ProcesarCheckInAperturaAsync(
                     conn,
@@ -300,16 +292,10 @@ namespace CerberusBusinessService.Functions.Asistencias
             }
         }
 
+        #endregion
 
-        // ============================================================
-        // CHECK-OUT DIRECTO
-        // ============================================================
-        //
-        // El flujo de Oficina permanece exactamente igual.
-        //
-        // La geolocalización que estamos agregando actualmente
-        // corresponde al CHECK-IN.
-        // ============================================================
+
+        #region CHECK-OUT DIRECTO
 
         public async Task<ResponseModel<CheckOutResponse>>
             ProcesarCheckOut(
@@ -320,15 +306,11 @@ namespace CerberusBusinessService.Functions.Asistencias
             ResponseModel<CheckOutResponse> response =
                 new ResponseModel<CheckOutResponse>();
 
-
-            SqlTransaction? transaction =
-                null;
-
+            SqlTransaction? transaction = null;
 
             try
             {
-                if (string.IsNullOrWhiteSpace(
-                    numeroUsuario))
+                if (string.IsNullOrWhiteSpace(numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -338,7 +320,6 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                     return response;
                 }
-
 
                 // ====================================================
                 // OFICINA
@@ -357,24 +338,18 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-
                 using var conn =
-                    new SqlConnection(
-                        _csCerberus);
-
+                    new SqlConnection(_csCerberus);
 
                 await conn.OpenAsync(ct);
-
 
                 DateTime fechaHoraActual =
                     await ObtenerFechaServidorAsync(
                         conn,
                         ct);
 
-
                 transaction =
                     conn.BeginTransaction();
-
 
                 // ====================================================
                 // BUSCAR ASISTENCIA ACTIVA
@@ -399,31 +374,26 @@ ORDER BY
     FechaHoraCheckIn DESC,
     AsistenciaId DESC;";
 
-
                 AsistenciaActivaCheckOutDto? asistencia =
-                    await conn
-                        .QueryFirstOrDefaultAsync
-                            <AsistenciaActivaCheckOutDto>(
-                                new CommandDefinition(
-                                    sqlAsistencia,
-                                    new
-                                    {
-                                        NumeroUsuario =
-                                            numeroUsuario.Trim(),
+                    await conn.QueryFirstOrDefaultAsync<
+                        AsistenciaActivaCheckOutDto>(
+                        new CommandDefinition(
+                            sqlAsistencia,
+                            new
+                            {
+                                NumeroUsuario =
+                                    numeroUsuario.Trim(),
 
-                                        EstatusEnTurno =
-                                            ESTATUS_EN_TURNO
-                                    },
-                                    transaction,
-                                    cancellationToken: ct));
-
+                                EstatusEnTurno =
+                                    ESTATUS_EN_TURNO
+                            },
+                            transaction,
+                            cancellationToken: ct));
 
                 if (asistencia == null)
                 {
                     transaction.Rollback();
-
                     transaction = null;
-
 
                     response.isSuccess = false;
                     response.code = 404;
@@ -433,7 +403,6 @@ ORDER BY
 
                     return response;
                 }
-
 
                 // ====================================================
                 // CHECK-OUT DIRECTO
@@ -447,7 +416,6 @@ SET
 WHERE AsistenciaId = @AsistenciaId
   AND Estatus = @EstatusEnTurno
   AND FechaHoraCheckOut IS NULL;";
-
 
                 int rows =
                     await conn.ExecuteAsync(
@@ -469,13 +437,10 @@ WHERE AsistenciaId = @AsistenciaId
                             transaction,
                             cancellationToken: ct));
 
-
                 if (rows != 1)
                 {
                     transaction.Rollback();
-
                     transaction = null;
-
 
                     response.isSuccess = false;
                     response.code = 409;
@@ -486,11 +451,8 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-
                 transaction.Commit();
-
                 transaction = null;
-
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -498,7 +460,6 @@ WHERE AsistenciaId = @AsistenciaId
                     "Check-Out registrado correctamente.";
                 response.desc =
                     "El Check-Out se realizó directamente por pertenecer al rol Oficina.";
-
 
                 response.data =
                     new CheckOutResponse
@@ -519,12 +480,10 @@ WHERE AsistenciaId = @AsistenciaId
                             asistencia.FechaTurno,
 
                         FechaHoraEntradaProgramada =
-                            asistencia
-                                .FechaHoraEntradaProgramada,
+                            asistencia.FechaHoraEntradaProgramada,
 
                         FechaHoraSalidaProgramada =
-                            asistencia
-                                .FechaHoraSalidaProgramada,
+                            asistencia.FechaHoraSalidaProgramada,
 
                         FechaHoraCheckIn =
                             asistencia.FechaHoraCheckIn,
@@ -539,7 +498,6 @@ WHERE AsistenciaId = @AsistenciaId
                             "Finalizada"
                     };
 
-
                 return response;
             }
             catch (SqlException ex)
@@ -551,7 +509,6 @@ WHERE AsistenciaId = @AsistenciaId
                 catch
                 {
                 }
-
 
                 response.isSuccess = false;
                 response.code = 500;
@@ -573,7 +530,6 @@ WHERE AsistenciaId = @AsistenciaId
                 {
                 }
 
-
                 response.isSuccess = false;
                 response.code = 500;
                 response.message =
@@ -586,10 +542,10 @@ WHERE AsistenciaId = @AsistenciaId
             }
         }
 
+        #endregion
 
-        // ============================================================
-        // CHECK-IN APERTURA
-        // ============================================================
+
+        #region CHECK-IN APERTURA
 
         private async Task<ResponseModel<CheckInResponse>>
             ProcesarCheckInAperturaAsync(
@@ -607,22 +563,17 @@ WHERE AsistenciaId = @AsistenciaId
             ResponseModel<CheckInResponse> response =
                 new ResponseModel<CheckInResponse>();
 
-
             var controlHora =
                 CalcularHoraCheckIn(
                     entradaProgramada,
                     fechaHoraActual);
 
-
-            SqlTransaction? transaction =
-                null;
-
+            SqlTransaction? transaction = null;
 
             try
             {
                 transaction =
                     conn.BeginTransaction();
-
 
                 bool existe =
                     await ExisteAsistenciaAsync(
@@ -632,7 +583,6 @@ WHERE AsistenciaId = @AsistenciaId
                         fechaTurno,
                         true,
                         ct);
-
 
                 if (existe)
                 {
@@ -647,13 +597,8 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-
                 // ====================================================
                 // INSERT ASISTENCIA
-                // ====================================================
-                //
-                // La geolocalización se guarda también para los
-                // Check-In de apertura.
                 // ====================================================
 
                 long asistenciaId =
@@ -675,14 +620,11 @@ WHERE AsistenciaId = @AsistenciaId
                         fechaHoraActual,
                         ct);
 
-
                 // ====================================================
                 // RETARDO
                 // ====================================================
 
-                long? incidenciaRetardoId =
-                    null;
-
+                long? incidenciaRetardoId = null;
 
                 if (controlHora.EsRetardo &&
                     controlHora.MinutosRetardo.HasValue)
@@ -699,9 +641,7 @@ WHERE AsistenciaId = @AsistenciaId
                             ct);
                 }
 
-
                 transaction.Commit();
-
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -709,7 +649,6 @@ WHERE AsistenciaId = @AsistenciaId
                     "Check-In registrado correctamente.";
                 response.desc =
                     "El empleado quedó registrado en turno.";
-
 
                 response.data =
                     CrearCheckInResponse(
@@ -727,7 +666,6 @@ WHERE AsistenciaId = @AsistenciaId
                         ESTATUS_EN_TURNO,
                         "En turno");
 
-
                 return response;
             }
             catch
@@ -744,10 +682,10 @@ WHERE AsistenciaId = @AsistenciaId
             }
         }
 
+        #endregion
 
-        // ============================================================
-        // CHECK-IN RELEVO CONTINUO
-        // ============================================================
+
+        #region CHECK-IN RELEVO CONTINUO
 
         private async Task<ResponseModel<CheckInResponse>>
             ProcesarCheckInRelevoContinuoAsync(
@@ -767,18 +705,12 @@ WHERE AsistenciaId = @AsistenciaId
             ResponseModel<CheckInResponse> response =
                 new ResponseModel<CheckInResponse>();
 
-
             List<string> archivosR2 =
                 new List<string>();
 
+            SqlTransaction? transaction = null;
 
-            SqlTransaction? transaction =
-                null;
-
-
-            bool commitRealizado =
-                false;
-
+            bool commitRealizado = false;
 
             try
             {
@@ -787,27 +719,22 @@ WHERE AsistenciaId = @AsistenciaId
                 // ====================================================
 
                 string? error =
-                    ValidarRequestRelevo(
-                        data);
-
+                    ValidarRequestRelevo(data);
 
                 if (error != null)
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message =
-                        error;
+                    response.message = error;
                     response.data = null;
 
                     return response;
                 }
 
-
                 string numeroEmpleadoSaliente =
                     data.Formulario!
                         .IdEmpleadoSaliente!
                         .Trim();
-
 
                 if (string.Equals(
                     numeroEmpleadoSaliente,
@@ -823,7 +750,6 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-
                 // ====================================================
                 // EMPLEADO SALIENTE
                 // ====================================================
@@ -833,7 +759,6 @@ WHERE AsistenciaId = @AsistenciaId
                         conn,
                         numeroEmpleadoSaliente,
                         ct);
-
 
                 if (!salienteExiste)
                 {
@@ -846,14 +771,12 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-
                 bool salienteEnTurno =
                     await ExisteEmpleadoSalienteEnTurnoAsync(
                         conn,
                         asignacion.ServicioId,
                         numeroEmpleadoSaliente,
                         ct);
-
 
                 if (!salienteEnTurno)
                 {
@@ -866,7 +789,6 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-
                 // ====================================================
                 // HORA / RETARDO
                 // ====================================================
@@ -876,9 +798,8 @@ WHERE AsistenciaId = @AsistenciaId
                         entradaProgramada,
                         fechaHoraActual);
 
-
                 // ====================================================
-                // DUPLICADO
+                // DUPLICADO PREVIO
                 // ====================================================
 
                 bool duplicadoPrevio =
@@ -889,7 +810,6 @@ WHERE AsistenciaId = @AsistenciaId
                         fechaTurno,
                         false,
                         ct);
-
 
                 if (duplicadoPrevio)
                 {
@@ -902,15 +822,12 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-
                 // ====================================================
                 // ARCHIVOS
                 // ====================================================
 
                 string operacionId =
-                    Guid.NewGuid()
-                        .ToString("N");
-
+                    Guid.NewGuid().ToString("N");
 
                 var firmaEntrante =
                     await SubirArchivoAsync(
@@ -923,13 +840,11 @@ WHERE AsistenciaId = @AsistenciaId
                         archivosR2,
                         ct);
 
-
                 if (!firmaEntrante.isSuccess)
                 {
                     return ErrorArchivo(
                         firmaEntrante);
                 }
-
 
                 var firmaSaliente =
                     await SubirArchivoAsync(
@@ -942,18 +857,15 @@ WHERE AsistenciaId = @AsistenciaId
                         archivosR2,
                         ct);
 
-
                 if (!firmaSaliente.isSuccess)
                 {
                     await LimpiarArchivosAsync(
                         archivosR2,
                         ct);
 
-
                     return ErrorArchivo(
                         firmaSaliente);
                 }
-
 
                 var fotoZona =
                     await SubirArchivoAsync(
@@ -965,39 +877,28 @@ WHERE AsistenciaId = @AsistenciaId
                         archivosR2,
                         ct);
 
-
                 if (!fotoZona.isSuccess)
                 {
                     await LimpiarArchivosAsync(
                         archivosR2,
                         ct);
 
-
                     return ErrorArchivo(
                         fotoZona);
                 }
 
-
                 // ====================================================
                 // RESGUARDOS
-                //
-                // OPCIONAL:
-                //
-                // null válido
-                // [] válido
                 // ====================================================
 
                 List<ResguardoCheckInRequest> resguardos =
                     data.Resguardo
                     ?? new List<ResguardoCheckInRequest>();
 
-
                 List<string?> fotosResguardo =
                     new List<string?>();
 
-
-                foreach (var item
-                         in resguardos)
+                foreach (var item in resguardos)
                 {
                     if (item.Foto != null &&
                         item.Foto.Length > 0)
@@ -1012,18 +913,15 @@ WHERE AsistenciaId = @AsistenciaId
                                 archivosR2,
                                 ct);
 
-
                         if (!upload.isSuccess)
                         {
                             await LimpiarArchivosAsync(
                                 archivosR2,
                                 ct);
 
-
                             return ErrorArchivo(
                                 upload);
                         }
-
 
                         fotosResguardo.Add(
                             upload.data);
@@ -1035,14 +933,12 @@ WHERE AsistenciaId = @AsistenciaId
                     }
                 }
 
-
                 // ====================================================
-                // TRANSACCIÓN
+                // TRANSACCION
                 // ====================================================
 
                 transaction =
                     conn.BeginTransaction();
-
 
                 bool duplicado =
                     await ExisteAsistenciaAsync(
@@ -1053,18 +949,14 @@ WHERE AsistenciaId = @AsistenciaId
                         true,
                         ct);
 
-
                 if (duplicado)
                 {
                     transaction.Rollback();
-
                     transaction = null;
-
 
                     await LimpiarArchivosAsync(
                         archivosR2,
                         ct);
-
 
                     response.isSuccess = false;
                     response.code = 409;
@@ -1074,7 +966,6 @@ WHERE AsistenciaId = @AsistenciaId
 
                     return response;
                 }
-
 
                 // ====================================================
                 // ASISTENCIA
@@ -1099,7 +990,6 @@ WHERE AsistenciaId = @AsistenciaId
                         fechaHoraActual,
                         ct);
 
-
                 // ====================================================
                 // ETO6
                 // ====================================================
@@ -1111,7 +1001,6 @@ WHERE AsistenciaId = @AsistenciaId
                     data,
                     fechaHoraActual,
                     ct);
-
 
                 // ====================================================
                 // FORMULARIO
@@ -1127,7 +1016,6 @@ WHERE AsistenciaId = @AsistenciaId
                     fotoZona.data!,
                     fechaHoraActual,
                     ct);
-
 
                 // ====================================================
                 // RESGUARDOS
@@ -1145,14 +1033,11 @@ WHERE AsistenciaId = @AsistenciaId
                         ct);
                 }
 
-
                 // ====================================================
                 // RETARDO
                 // ====================================================
 
-                long? incidenciaRetardoId =
-                    null;
-
+                long? incidenciaRetardoId = null;
 
                 if (controlHora.EsRetardo &&
                     controlHora.MinutosRetardo.HasValue)
@@ -1169,17 +1054,14 @@ WHERE AsistenciaId = @AsistenciaId
                             ct);
                 }
 
-
                 // ====================================================
                 // COMMIT
                 // ====================================================
 
                 transaction.Commit();
-
                 transaction = null;
 
                 commitRealizado = true;
-
 
                 // ====================================================
                 // RESPONSE
@@ -1191,7 +1073,6 @@ WHERE AsistenciaId = @AsistenciaId
                     "Check-In registrado correctamente.";
                 response.desc =
                     "La asistencia quedó pendiente de autorización.";
-
 
                 response.data =
                     CrearCheckInResponse(
@@ -1209,9 +1090,8 @@ WHERE AsistenciaId = @AsistenciaId
                         ESTATUS_PENDIENTE_AUTORIZAR,
                         "Pendiente autorizar");
 
-
                 // ====================================================
-                // PAYLOAD NOTIFICACIÓN
+                // PAYLOAD NOTIFICACION
                 // ====================================================
 
                 var resguardosNotificacion =
@@ -1221,20 +1101,15 @@ WHERE AsistenciaId = @AsistenciaId
                                 new
                                 {
                                     item.IdObjeto,
-
                                     item.Cantidad,
-
                                     item.Identificador,
-
                                     item.IdEstado,
-
                                     item.Observaciones,
 
                                     RutaFoto =
                                         fotosResguardo[index]
                                 })
                         .ToList();
-
 
                 var notificationData =
                     new
@@ -1268,10 +1143,6 @@ WHERE AsistenciaId = @AsistenciaId
 
                         FechaHoraRegistro =
                             fechaHoraActual,
-
-                        // ============================================
-                        // GEOLOCALIZACIÓN
-                        // ============================================
 
                         Latitud =
                             latitud,
@@ -1343,11 +1214,10 @@ WHERE AsistenciaId = @AsistenciaId
                             }
                     };
 
-
                 // ====================================================
                 // NOTIFICAR SUPERVISORES
                 //
-                // DESPUÉS DEL COMMIT.
+                // SIEMPRE DESPUES DEL COMMIT.
                 // ====================================================
 
                 try
@@ -1363,7 +1233,6 @@ WHERE AsistenciaId = @AsistenciaId
                                 notificationData,
                                 accessToken,
                                 ct);
-
 
                     if (notificationResponse.isSuccess)
                     {
@@ -1387,7 +1256,6 @@ WHERE AsistenciaId = @AsistenciaId
                         ex.Message;
                 }
 
-
                 return response;
             }
             catch
@@ -1402,21 +1270,19 @@ WHERE AsistenciaId = @AsistenciaId
                     {
                     }
 
-
                     await LimpiarArchivosAsync(
                         archivosR2,
                         ct);
                 }
 
-
                 throw;
             }
         }
 
+        #endregion
 
-        // ============================================================
-        // VALIDAR GEOLOCALIZACIÓN
-        // ============================================================
+
+        #region VALIDACIONES CHECK-IN
 
         private string? ValidarGeolocalizacion(
             double? latitud,
@@ -1428,13 +1294,11 @@ WHERE AsistenciaId = @AsistenciaId
                     "La latitud es obligatoria para registrar el Check-In.";
             }
 
-
             if (!longitud.HasValue)
             {
                 return
                     "La longitud es obligatoria para registrar el Check-In.";
             }
-
 
             if (latitud.Value < -90 ||
                 latitud.Value > 90)
@@ -1443,7 +1307,6 @@ WHERE AsistenciaId = @AsistenciaId
                     "La latitud debe encontrarse entre -90 y 90.";
             }
 
-
             if (longitud.Value < -180 ||
                 longitud.Value > 180)
             {
@@ -1451,31 +1314,98 @@ WHERE AsistenciaId = @AsistenciaId
                     "La longitud debe encontrarse entre -180 y 180.";
             }
 
-
             return null;
         }
 
 
-        // ============================================================
-        // FECHA SERVIDOR
-        // ============================================================
+        private string? ValidarRequestRelevo(
+            CheckInRequest data)
+        {
+            if (data == null)
+            {
+                return
+                    "El request es obligatorio.";
+            }
+
+            if (data.FormatoEntrada == null)
+            {
+                return
+                    "FormatoEntrada es obligatorio para un Check-In con relevo.";
+            }
+
+            if (data.FormatoEntrada
+                    .EmpleadoEntrante == null)
+            {
+                return
+                    "EmpleadoEntrante es obligatorio para un Check-In con relevo.";
+            }
+
+            if (data.Formulario == null)
+            {
+                return
+                    "Formulario es obligatorio para un Check-In con relevo.";
+            }
+
+            if (string.IsNullOrWhiteSpace(
+                data.Formulario.IdEmpleadoSaliente))
+            {
+                return
+                    "El empleado saliente es obligatorio para un Check-In con relevo.";
+            }
+
+            if (data.Formulario
+                    .ImagenFirmaEntrante == null ||
+                data.Formulario
+                    .ImagenFirmaEntrante
+                    .Length == 0)
+            {
+                return
+                    "La firma del empleado entrante es obligatoria.";
+            }
+
+            if (data.Formulario
+                    .ImagenFirmaSaliente == null ||
+                data.Formulario
+                    .ImagenFirmaSaliente
+                    .Length == 0)
+            {
+                return
+                    "La firma del empleado saliente es obligatoria.";
+            }
+
+            if (data.Formulario.Foto == null ||
+                data.Formulario.Foto.Length == 0)
+            {
+                return
+                    "La fotografía de la zona es obligatoria.";
+            }
+
+            // Resguardo es opcional:
+            // null, [], o N elementos son válidos.
+
+            return null;
+        }
+
+        #endregion
+
+
+        #region FECHA SERVIDOR
 
         private async Task<DateTime>
             ObtenerFechaServidorAsync(
                 SqlConnection conn,
                 CancellationToken ct)
         {
-            return await conn
-                .ExecuteScalarAsync<DateTime>(
-                    new CommandDefinition(
-                        "SELECT SYSDATETIME();",
-                        cancellationToken: ct));
+            return await conn.ExecuteScalarAsync<DateTime>(
+                new CommandDefinition(
+                    "SELECT SYSDATETIME();",
+                    cancellationToken: ct));
         }
 
+        #endregion
 
-        // ============================================================
-        // OBTENER EMPLEADO
-        // ============================================================
+
+        #region EMPLEADOS
 
         private async Task<EmpleadoAsistenciaDto?>
             ObtenerEmpleadoAsync(
@@ -1490,7 +1420,6 @@ SELECT TOP (1)
 FROM dbo.DatosGeneralesEmpleado
 WHERE UsuarioAsignado = @NumeroUsuario;";
 
-
             return await conn
                 .QueryFirstOrDefaultAsync<EmpleadoAsistenciaDto>(
                     new CommandDefinition(
@@ -1504,10 +1433,6 @@ WHERE UsuarioAsignado = @NumeroUsuario;";
         }
 
 
-        // ============================================================
-        // EXISTE EMPLEADO
-        // ============================================================
-
         private async Task<bool>
             ExisteEmpleadoAsync(
                 SqlConnection conn,
@@ -1518,7 +1443,6 @@ WHERE UsuarioAsignado = @NumeroUsuario;";
 SELECT COUNT(1)
 FROM dbo.DatosGeneralesEmpleado
 WHERE UsuarioAsignado = @NumeroUsuario;";
-
 
             int cantidad =
                 await conn.ExecuteScalarAsync<int>(
@@ -1531,14 +1455,9 @@ WHERE UsuarioAsignado = @NumeroUsuario;";
                         },
                         cancellationToken: ct));
 
-
             return cantidad > 0;
         }
 
-
-        // ============================================================
-        // SALIENTE EN TURNO
-        // ============================================================
 
         private async Task<bool>
             ExisteEmpleadoSalienteEnTurnoAsync(
@@ -1554,7 +1473,6 @@ WHERE ServicioId = @ServicioId
   AND NumeroEmpleadoEntrante = @NumeroEmpleadoSaliente
   AND Estatus = @EstatusEnTurno
   AND FechaHoraCheckOut IS NULL;";
-
 
             int cantidad =
                 await conn.ExecuteScalarAsync<int>(
@@ -1573,14 +1491,13 @@ WHERE ServicioId = @ServicioId
                         },
                         cancellationToken: ct));
 
-
             return cantidad > 0;
         }
 
+        #endregion
 
-        // ============================================================
-        // OBTENER TURNO PRÓXIMO
-        // ============================================================
+
+        #region TURNOS Y HORARIOS
 
         private async Task<(
             ServicioEmpleadoCheckInDto Asignacion,
@@ -1596,10 +1513,8 @@ WHERE ServicioId = @ServicioId
             DateTime hoy =
                 fechaHoraActual.Date;
 
-
             DateTime ayer =
                 hoy.AddDays(-1);
-
 
             const string sql = @"
 SELECT
@@ -1625,7 +1540,6 @@ ORDER BY
     FechaInicio DESC,
     ServicioEmpleadoId DESC;";
 
-
             IEnumerable<ServicioEmpleadoCheckInDto> result =
                 await conn.QueryAsync<ServicioEmpleadoCheckInDto>(
                     new CommandDefinition(
@@ -1643,10 +1557,8 @@ ORDER BY
                         },
                         cancellationToken: ct));
 
-
             List<ServicioEmpleadoCheckInDto> asignaciones =
                 result.ToList();
-
 
             // ========================================================
             // TURNO ACTIVO
@@ -1659,7 +1571,6 @@ ORDER BY
                     DateTime Entrada,
                     DateTime Salida)>();
 
-
             foreach (ServicioEmpleadoCheckInDto asignacion
                      in asignaciones)
             {
@@ -1669,9 +1580,7 @@ ORDER BY
                     hoy
                 };
 
-
-                foreach (DateTime fecha
-                         in fechas)
+                foreach (DateTime fecha in fechas)
                 {
                     if (!FechaDentroDeAsignacion(
                         fecha,
@@ -1680,18 +1589,13 @@ ORDER BY
                         continue;
                     }
 
-
                     DateTime entrada =
-                        fecha.Date
-                            .Add(
-                                asignacion.HoraEntrada);
-
+                        fecha.Date.Add(
+                            asignacion.HoraEntrada);
 
                     DateTime salida =
-                        fecha.Date
-                            .Add(
-                                asignacion.HoraSalida);
-
+                        fecha.Date.Add(
+                            asignacion.HoraSalida);
 
                     if (asignacion.SalidaDiaSiguiente)
                     {
@@ -1699,12 +1603,10 @@ ORDER BY
                             salida.AddDays(1);
                     }
 
-
                     if (salida <= entrada)
                     {
                         continue;
                     }
-
 
                     if (fechaHoraActual >= entrada &&
                         fechaHoraActual <= salida)
@@ -1720,7 +1622,6 @@ ORDER BY
                 }
             }
 
-
             if (activos.Count > 0)
             {
                 var turnoActivo =
@@ -1728,7 +1629,6 @@ ORDER BY
                         .OrderByDescending(
                             x => x.Entrada)
                         .First();
-
 
                 return (
                     turnoActivo.Asignacion,
@@ -1738,9 +1638,8 @@ ORDER BY
                 );
             }
 
-
             // ========================================================
-            // PRÓXIMO TURNO DE HOY
+            // PROXIMO TURNO DE HOY
             // ========================================================
 
             var proximos =
@@ -1749,7 +1648,6 @@ ORDER BY
                     DateTime FechaTurno,
                     DateTime Entrada,
                     DateTime Salida)>();
-
 
             foreach (ServicioEmpleadoCheckInDto asignacion
                      in asignaciones)
@@ -1761,16 +1659,13 @@ ORDER BY
                     continue;
                 }
 
-
                 DateTime entrada =
                     hoy.Add(
                         asignacion.HoraEntrada);
 
-
                 DateTime salida =
                     hoy.Add(
                         asignacion.HoraSalida);
-
 
                 if (asignacion.SalidaDiaSiguiente)
                 {
@@ -1778,15 +1673,12 @@ ORDER BY
                         salida.AddDays(1);
                 }
 
-
                 if (salida <= entrada)
                 {
                     continue;
                 }
 
-
-                if (entrada >
-                    fechaHoraActual)
+                if (entrada > fechaHoraActual)
                 {
                     proximos.Add(
                         (
@@ -1798,19 +1690,16 @@ ORDER BY
                 }
             }
 
-
             if (proximos.Count == 0)
             {
                 return null;
             }
-
 
             var proximo =
                 proximos
                     .OrderBy(
                         x => x.Entrada)
                     .First();
-
 
             return (
                 proximo.Asignacion,
@@ -1820,10 +1709,6 @@ ORDER BY
             );
         }
 
-
-        // ============================================================
-        // HORARIO DEL SERVICIO
-        // ============================================================
 
         private async Task<ServicioHorarioCheckInDto?>
             ObtenerHorarioServicioAsync(
@@ -1835,7 +1720,6 @@ ORDER BY
             byte diaSemana =
                 ObtenerDiaSemana(
                     fechaTurno);
-
 
             const string sql = @"
 SELECT TOP (1)
@@ -1866,7 +1750,6 @@ ORDER BY
     VigenteDesde DESC,
     IdServicioHorario DESC;";
 
-
             return await conn
                 .QueryFirstOrDefaultAsync<ServicioHorarioCheckInDto>(
                     new CommandDefinition(
@@ -1886,10 +1769,6 @@ ORDER BY
         }
 
 
-        // ============================================================
-        // SERVICIO CONTINUO
-        // ============================================================
-
         private bool EsServicioAtencionContinua(
             ServicioHorarioCheckInDto horario)
         {
@@ -1899,10 +1778,6 @@ ORDER BY
                 horario.CruzaDia;
         }
 
-
-        // ============================================================
-        // DÍA SEMANA
-        // ============================================================
 
         private byte ObtenerDiaSemana(
             DateTime fecha)
@@ -1923,10 +1798,6 @@ ORDER BY
         }
 
 
-        // ============================================================
-        // CONTROL HORA CHECK-IN
-        // ============================================================
-
         private (
             DateTime FechaHoraCheckIn,
             bool EsRetardo,
@@ -1935,8 +1806,6 @@ ORDER BY
                 DateTime entradaProgramada,
                 DateTime fechaHoraActual)
         {
-            // LLEGA ANTES
-
             if (fechaHoraActual <
                 entradaProgramada)
             {
@@ -1946,14 +1815,9 @@ ORDER BY
                     null);
             }
 
-
             DateTime limiteTolerancia =
-                entradaProgramada
-                    .AddMinutes(
-                        MINUTOS_TOLERANCIA_RETARDO);
-
-
-            // DENTRO DE TOLERANCIA
+                entradaProgramada.AddMinutes(
+                    MINUTOS_TOLERANCIA_RETARDO);
 
             if (fechaHoraActual <=
                 limiteTolerancia)
@@ -1964,9 +1828,6 @@ ORDER BY
                     null);
             }
 
-
-            // RETARDO
-
             int minutosRetardo =
                 (int)Math.Ceiling(
                     (
@@ -1974,17 +1835,12 @@ ORDER BY
                         entradaProgramada
                     ).TotalMinutes);
 
-
             return (
                 fechaHoraActual,
                 true,
                 minutosRetardo);
         }
 
-
-        // ============================================================
-        // FECHA ASIGNACIÓN
-        // ============================================================
 
         private bool FechaDentroDeAsignacion(
             DateTime fecha,
@@ -1996,7 +1852,6 @@ ORDER BY
                 return false;
             }
 
-
             if (asignacion.FechaFin.HasValue &&
                 fecha.Date >
                 asignacion.FechaFin.Value.Date)
@@ -2004,14 +1859,13 @@ ORDER BY
                 return false;
             }
 
-
             return true;
         }
 
+        #endregion
 
-        // ============================================================
-        // EXISTE ASISTENCIA
-        // ============================================================
+
+        #region ASISTENCIA - EXISTENCIA E INSERCION
 
         private async Task<bool>
             ExisteAsistenciaAsync(
@@ -2027,14 +1881,12 @@ ORDER BY
                     ? " WITH (UPDLOCK, HOLDLOCK)"
                     : string.Empty;
 
-
             string sql = $@"
 SELECT COUNT(1)
 FROM dbo.Asistencia{lockSql}
 WHERE ServicioEmpleadoId = @ServicioEmpleadoId
   AND FechaTurno = @FechaTurno
   AND Estatus <> @EstatusCancelada;";
-
 
             int cantidad =
                 await conn.ExecuteScalarAsync<int>(
@@ -2054,14 +1906,9 @@ WHERE ServicioEmpleadoId = @ServicioEmpleadoId
                         transaction,
                         cancellationToken: ct));
 
-
             return cantidad > 0;
         }
 
-
-        // ============================================================
-        // INSERTAR ASISTENCIA
-        // ============================================================
 
         private async Task<long>
             InsertarAsistenciaAsync(
@@ -2127,14 +1974,12 @@ VALUES
     @UsuarioRegistro
 );";
 
-
             return await conn.ExecuteScalarAsync<long>(
                 new CommandDefinition(
                     sql,
                     new
                     {
                         asignacion.ServicioId,
-
                         asignacion.ServicioEmpleadoId,
 
                         NumeroEmpleadoEntrante =
@@ -2180,10 +2025,10 @@ VALUES
                     cancellationToken: ct));
         }
 
+        #endregion
 
-        // ============================================================
-        // FORMATO ENTRADA
-        // ============================================================
+
+        #region FORMATO ENTRADA
 
         private async Task InsertarFormatoEntradaAsync(
             SqlConnection conn,
@@ -2216,7 +2061,6 @@ VALUES
     @HorarioDiaDescanso,
     @FechaRegistro
 );";
-
 
             await conn.ExecuteAsync(
                 new CommandDefinition(
@@ -2257,10 +2101,10 @@ VALUES
                     cancellationToken: ct));
         }
 
+        #endregion
 
-        // ============================================================
-        // FORMULARIO
-        // ============================================================
+
+        #region FORMULARIO
 
         private async Task InsertarFormularioAsync(
             SqlConnection conn,
@@ -2292,7 +2136,6 @@ VALUES
     @RutaFotoZona,
     @FechaRegistro
 );";
-
 
             await conn.ExecuteAsync(
                 new CommandDefinition(
@@ -2327,10 +2170,10 @@ VALUES
                     cancellationToken: ct));
         }
 
+        #endregion
 
-        // ============================================================
-        // RESGUARDOS
-        // ============================================================
+
+        #region RESGUARDOS
 
         private async Task InsertarResguardosAsync(
             SqlConnection conn,
@@ -2365,14 +2208,12 @@ VALUES
     @FechaRegistro
 );";
 
-
             for (int i = 0;
                  i < resguardos.Count;
                  i++)
             {
                 ResguardoCheckInRequest item =
                     resguardos[i];
-
 
                 await conn.ExecuteAsync(
                     new CommandDefinition(
@@ -2383,13 +2224,9 @@ VALUES
                                 asistenciaId,
 
                             item.IdObjeto,
-
                             item.Cantidad,
-
                             item.Identificador,
-
                             item.IdEstado,
-
                             item.Observaciones,
 
                             RutaFoto =
@@ -2403,10 +2240,10 @@ VALUES
             }
         }
 
+        #endregion
 
-        // ============================================================
-        // INCIDENCIA RETARDO
-        // ============================================================
+
+        #region INCIDENCIAS
 
         private async Task<long>
             RegistrarIncidenciaRetardoAsync(
@@ -2429,7 +2266,6 @@ FROM dbo.CAT_TIPO_INCIDENCIA
 WHERE Clave = 'RETARDO'
   AND Estatus = 1;";
 
-
             TipoIncidenciaDto? tipoRetardo =
                 await conn
                     .QueryFirstOrDefaultAsync<TipoIncidenciaDto>(
@@ -2438,13 +2274,11 @@ WHERE Clave = 'RETARDO'
                             transaction: transaction,
                             cancellationToken: ct));
 
-
             if (tipoRetardo == null)
             {
                 throw new InvalidOperationException(
                     "No existe una configuración activa para la incidencia RETARDO.");
             }
-
 
             const string sql = @"
 INSERT INTO dbo.Incidencias
@@ -2479,7 +2313,6 @@ VALUES
     @FechaRegistro
 );";
 
-
             return await conn.ExecuteScalarAsync<long>(
                 new CommandDefinition(
                     sql,
@@ -2504,9 +2337,7 @@ VALUES
                             $"Tolerancia permitida: {MINUTOS_TOLERANCIA_RETARDO} minutos.",
 
                         tipoRetardo.AfectaNomina,
-
                         tipoRetardo.TipoAfectacionNomina,
-
                         tipoRetardo.MontoAfectacion,
 
                         UsuarioRegistro =
@@ -2519,10 +2350,10 @@ VALUES
                     cancellationToken: ct));
         }
 
+        #endregion
 
-        // ============================================================
-        // R2
-        // ============================================================
+
+        #region R2
 
         private async Task<ResponseModel<string>>
             SubirArchivoAsync(
@@ -2544,7 +2375,6 @@ VALUES
                         categoria,
                         ct);
 
-
             if (upload.isSuccess &&
                 !string.IsNullOrWhiteSpace(
                     upload.data))
@@ -2552,7 +2382,6 @@ VALUES
                 archivosR2.Add(
                     upload.data);
             }
-
 
             return upload;
         }
@@ -2562,8 +2391,7 @@ VALUES
             IEnumerable<string> archivos,
             CancellationToken ct)
         {
-            foreach (string key
-                     in archivos)
+            foreach (string key in archivos)
             {
                 try
                 {
@@ -2602,100 +2430,10 @@ VALUES
             };
         }
 
-
-        // ============================================================
-        // VALIDACIÓN RELEVO
-        // ============================================================
-
-        private string? ValidarRequestRelevo(
-            CheckInRequest data)
-        {
-            if (data == null)
-            {
-                return
-                    "El request es obligatorio.";
-            }
+        #endregion
 
 
-            if (data.FormatoEntrada == null)
-            {
-                return
-                    "FormatoEntrada es obligatorio para un Check-In con relevo.";
-            }
-
-
-            if (data.FormatoEntrada
-                    .EmpleadoEntrante == null)
-            {
-                return
-                    "EmpleadoEntrante es obligatorio para un Check-In con relevo.";
-            }
-
-
-            if (data.Formulario == null)
-            {
-                return
-                    "Formulario es obligatorio para un Check-In con relevo.";
-            }
-
-
-            if (string.IsNullOrWhiteSpace(
-                data.Formulario
-                    .IdEmpleadoSaliente))
-            {
-                return
-                    "El empleado saliente es obligatorio para un Check-In con relevo.";
-            }
-
-
-            if (data.Formulario
-                    .ImagenFirmaEntrante == null ||
-                data.Formulario
-                    .ImagenFirmaEntrante
-                    .Length == 0)
-            {
-                return
-                    "La firma del empleado entrante es obligatoria.";
-            }
-
-
-            if (data.Formulario
-                    .ImagenFirmaSaliente == null ||
-                data.Formulario
-                    .ImagenFirmaSaliente
-                    .Length == 0)
-            {
-                return
-                    "La firma del empleado saliente es obligatoria.";
-            }
-
-
-            if (data.Formulario.Foto == null ||
-                data.Formulario.Foto.Length == 0)
-            {
-                return
-                    "La fotografía de la zona es obligatoria.";
-            }
-
-
-            // ========================================================
-            // RESGUARDO NO SE VALIDA.
-            //
-            // Puede venir:
-            //
-            // null
-            // []
-            // N elementos
-            // ========================================================
-
-
-            return null;
-        }
-
-
-        // ============================================================
-        // RESPONSE CHECK-IN
-        // ============================================================
+        #region RESPONSE CHECK-IN
 
         private CheckInResponse CrearCheckInResponse(
             long asistenciaId,
@@ -2758,7 +2496,10 @@ VALUES
             };
         }
 
-        #region RELEVOS ESPERADOS CHECKOUT
+        #endregion
+
+
+        #region RELEVOS ESPERADOS CHECK-OUT
 
         public async Task<ResponseModel<List<RelevoEsperadoCheckOutResponse>>>
             ObtenerRelevosEsperadosCheckOutAsync(
@@ -2766,7 +2507,8 @@ VALUES
                 CancellationToken ct)
         {
             var response =
-                new ResponseModel<List<RelevoEsperadoCheckOutResponse>>();
+                new ResponseModel<
+                    List<RelevoEsperadoCheckOutResponse>>();
 
             try
             {
@@ -2844,6 +2586,7 @@ VALUES
         }
 
         #endregion
+
 
         #region CONSULTAR RELEVOS ESPERADOS
 
@@ -2972,7 +2715,8 @@ ORDER BY
 
         #endregion
 
-        #region ASISTENCIA ACTIVA CHECKOUT
+
+        #region ASISTENCIA ACTIVA CHECK-OUT
 
         private async Task<AsistenciaActivaCheckOutDto?>
             ObtenerAsistenciaActivaCheckOutAsync(
@@ -3018,15 +2762,18 @@ ORDER BY
 
         #endregion
 
-        #region CHECKOUT SIN RELEVO
+
+        #region CHECK-OUT SIN RELEVO
 
         public async Task<ResponseModel<CheckOutRelevoResponse>>
             ProcesarCheckOutSinRelevoAsync(
                 CheckOutRelevoRequest data,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
-            var response = new ResponseModel<CheckOutRelevoResponse>();
+            var response =
+                new ResponseModel<CheckOutRelevoResponse>();
 
             try
             {
@@ -3038,13 +2785,15 @@ ORDER BY
                 {
                     response.isSuccess = false;
                     response.code = 401;
-                    response.message = "No fue posible identificar al empleado.";
+                    response.message =
+                        "No fue posible identificar al empleado.";
                     response.data = null;
 
                     return response;
                 }
 
-                numeroUsuario = numeroUsuario.Trim();
+                numeroUsuario =
+                    numeroUsuario.Trim();
 
                 // ============================================================
                 // VALIDAR REQUEST
@@ -3054,7 +2803,8 @@ ORDER BY
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message = "El request es obligatorio.";
+                    response.message =
+                        "El request es obligatorio.";
                     response.data = null;
 
                     return response;
@@ -3064,7 +2814,8 @@ ORDER BY
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message = "ServicioEmpleadoAfectadoId es inválido.";
+                    response.message =
+                        "ServicioEmpleadoAfectadoId es inválido.";
                     response.data = null;
 
                     return response;
@@ -3075,14 +2826,16 @@ ORDER BY
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message = "La fotografía de evidencia es obligatoria.";
+                    response.message =
+                        "La fotografía de evidencia es obligatoria.";
                     response.data = null;
 
                     return response;
                 }
 
                 if (!data.PuedePermanecer &&
-                    string.IsNullOrWhiteSpace(data.MotivoNoPermanencia))
+                    string.IsNullOrWhiteSpace(
+                        data.MotivoNoPermanencia))
                 {
                     response.isSuccess = false;
                     response.code = 400;
@@ -3097,7 +2850,8 @@ ORDER BY
                 // CONEXION
                 // ============================================================
 
-                using var conn = new SqlConnection(_csCerberus);
+                using var conn =
+                    new SqlConnection(_csCerberus);
 
                 await conn.OpenAsync(ct);
 
@@ -3124,19 +2878,21 @@ ORDER BY
                 }
 
                 // ============================================================
-                // OBTENER RELEVOS ESPERADOS DEL SIGUIENTE TURNO
+                // RELEVOS ESPERADOS DEL SIGUIENTE TURNO
                 // ============================================================
 
-                List<RelevoEsperadoCheckOutResponse> relevosEsperados =
-                    await ObtenerRelevosEsperadosAsync(
-                        conn,
-                        asistencia,
-                        ct);
+                List<RelevoEsperadoCheckOutResponse>
+                    relevosEsperados =
+                        await ObtenerRelevosEsperadosAsync(
+                            conn,
+                            asistencia,
+                            ct);
 
                 RelevoEsperadoCheckOutResponse? relevoAfectado =
                     relevosEsperados.FirstOrDefault(
-                        x => x.ServicioEmpleadoId ==
-                             data.ServicioEmpleadoAfectadoId);
+                        x =>
+                            x.ServicioEmpleadoId ==
+                            data.ServicioEmpleadoAfectadoId);
 
                 if (relevoAfectado == null)
                 {
@@ -3150,8 +2906,7 @@ ORDER BY
                 }
 
                 // ============================================================
-                // EL EMPLEADO SALIENTE NO PUEDE SER EL MISMO DEL TURNO
-                // QUE SE ESTA MARCANDO COMO AUSENTE
+                // EL SALIENTE NO PUEDE SER EL AUSENTE
                 // ============================================================
 
                 if (string.Equals(
@@ -3169,7 +2924,7 @@ ORDER BY
                 }
 
                 // ============================================================
-                // VALIDAR QUE EL RELEVO NO HAYA REALIZADO YA CHECK-IN
+                // VALIDAR CHECK-IN DEL RELEVO
                 // ============================================================
 
                 if (relevoAfectado.AsistenciaId.HasValue)
@@ -3200,7 +2955,7 @@ ORDER BY
                 }
 
                 // ============================================================
-                // ARMAR SOLICITUD DE RELEVO
+                // ARMAR SOLICITUD
                 // ============================================================
 
                 var solicitudRequest =
@@ -3216,10 +2971,12 @@ ORDER BY
                             "ASISTENCIA",
 
                         FechaHoraInicioCobertura =
-                            relevoAfectado.FechaHoraEntradaProgramada,
+                            relevoAfectado
+                                .FechaHoraEntradaProgramada,
 
                         FechaHoraFinCobertura =
-                            relevoAfectado.FechaHoraSalidaProgramada,
+                            relevoAfectado
+                                .FechaHoraSalidaProgramada,
 
                         MotivoRelevo =
                             "El empleado programado para el siguiente turno no se presentó al relevo.",
@@ -3227,7 +2984,8 @@ ORDER BY
                         MotivoNoPermanencia =
                             data.PuedePermanecer
                                 ? null
-                                : data.MotivoNoPermanencia!.Trim(),
+                                : data.MotivoNoPermanencia!
+                                    .Trim(),
 
                         FotoEvidencia =
                             data.FotoEvidencia
@@ -3236,29 +2994,37 @@ ORDER BY
                 // ============================================================
                 // CREAR SOLICITUD
                 //
-                // ESTE METODO REALIZA EN UNA MISMA TRANSACCION:
+                // MISMA TRANSACCION:
+                // - SOLICITUD
+                // - INCIDENCIA
+                // - CHECK-OUT SI NO PUEDE PERMANECER
                 //
-                // - SOLICITUD DE RELEVO
-                // - INCIDENCIA DEL EMPLEADO AUSENTE
-                // - CHECK-OUT DEL SALIENTE CUANDO NO PUEDE PERMANECER
+                // DESPUES DEL COMMIT:
+                // - NOTIFICACION SI QUEDA SIN COBERTURA
                 // ============================================================
 
-                ResponseModel<SolicitudRelevoNoPlaneadoDto> solicitudResponse =
-                    await _relevoNoPlaneadoFunctions
-                        .CrearSolicitudDesdeAsistenciaAsync(
-                            solicitudRequest,
-                            asistencia.AsistenciaId,
-                            realizarCheckOut: !data.PuedePermanecer,
-                            numeroUsuario,
-                            ct);
+                ResponseModel<SolicitudRelevoNoPlaneadoDto>
+                    solicitudResponse =
+                        await _relevoNoPlaneadoFunctions
+                            .CrearSolicitudDesdeAsistenciaAsync(
+                                solicitudRequest,
+                                asistencia.AsistenciaId,
+                                realizarCheckOut:
+                                    !data.PuedePermanecer,
+                                numeroUsuario,
+                                accessToken,
+                                ct);
 
                 if (!solicitudResponse.isSuccess ||
                     solicitudResponse.data == null)
                 {
                     response.isSuccess = false;
-                    response.code = solicitudResponse.code;
-                    response.message = solicitudResponse.message;
-                    response.desc = solicitudResponse.desc;
+                    response.code =
+                        solicitudResponse.code;
+                    response.message =
+                        solicitudResponse.message;
+                    response.desc =
+                        solicitudResponse.desc;
                     response.data = null;
 
                     return response;
@@ -3269,13 +3035,7 @@ ORDER BY
                         .SolicitudRelevoNoPlaneadoId;
 
                 // ============================================================
-                // EL EMPLEADO PUEDE PERMANECER
-                //
-                // SE CREA PROPUESTA DE EXTENSION.
-                //
-                // TODAVIA NO SE HACE CHECK-OUT.
-                // TODAVIA NO SE CREA EL SERVICIO EMPLEADO TEMPORAL.
-                // TODAVIA NO SE CREA LA ASISTENCIA DE EXTENSION.
+                // PUEDE PERMANECER -> PROPUESTA EXTENSION
                 // ============================================================
 
                 if (data.PuedePermanecer)
@@ -3286,17 +3046,26 @@ ORDER BY
                                 .CrearExtensionAsync(
                                     solicitudId,
                                     numeroUsuario,
+                                    accessToken,
                                     ct);
 
                     if (!extensionResponse.isSuccess ||
                         extensionResponse.data == null)
                     {
                         response.isSuccess = false;
-                        response.code = extensionResponse.code;
+                        response.code =
+                            extensionResponse.code;
+
                         response.message =
                             "La solicitud de relevo fue creada, pero no fue posible crear la propuesta de extensión.";
+
                         response.desc =
-                            extensionResponse.message;
+                            string.IsNullOrWhiteSpace(
+                                extensionResponse.desc)
+                                ? extensionResponse.message
+                                : extensionResponse.message +
+                                  " " +
+                                  extensionResponse.desc;
 
                         response.data =
                             new CheckOutRelevoResponse
@@ -3340,10 +3109,15 @@ ORDER BY
 
                     response.isSuccess = true;
                     response.code = 200;
+
                     response.message =
                         "La solicitud de relevo y la propuesta de extensión fueron creadas correctamente.";
+
                     response.desc =
-                        "La extensión quedó pendiente de autorización del supervisor.";
+                        string.IsNullOrWhiteSpace(
+                            extensionResponse.desc)
+                            ? "La extensión quedó pendiente de autorización del supervisor."
+                            : extensionResponse.desc;
 
                     response.data =
                         new CheckOutRelevoResponse
@@ -3387,23 +3161,25 @@ ORDER BY
                 }
 
                 // ============================================================
-                // EL EMPLEADO NO PUEDE PERMANECER
-                //
-                // EL CHECK-OUT YA SE REALIZO DENTRO DE
-                // CrearSolicitudDesdeAsistenciaAsync.
-                //
-                // EN ESA MISMA TRANSACCION TAMBIEN SE CREARON:
-                //
-                // - SOLICITUD
-                // - INCIDENCIA DE FALTA
+                // NO PUEDE PERMANECER
                 // ============================================================
 
                 response.isSuccess = true;
                 response.code = 200;
                 response.message =
                     "Check-Out registrado correctamente.";
+
                 response.desc =
-                    "Se registró la falta del empleado entrante y la solicitud de relevo quedó pendiente de asignación.";
+                    "Se registró la falta del empleado entrante y " +
+                    "la solicitud de relevo quedó pendiente de asignación.";
+
+                if (!string.IsNullOrWhiteSpace(
+                    solicitudResponse.desc))
+                {
+                    response.desc +=
+                        " " +
+                        solicitudResponse.desc;
+                }
 
                 response.data =
                     new CheckOutRelevoResponse
@@ -3433,7 +3209,8 @@ ORDER BY
                             true,
 
                         FechaHoraCheckOut =
-                            solicitudResponse.data.FechaRegistro,
+                            solicitudResponse.data
+                                .FechaRegistro,
 
                         SolicitudEstatusClave =
                             "PENDIENTE_ASIGNACION",

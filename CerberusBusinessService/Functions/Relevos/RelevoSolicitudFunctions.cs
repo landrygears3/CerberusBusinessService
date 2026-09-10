@@ -3,6 +3,7 @@ using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Relevos;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using CerberusBusinessService.Functions.Notificaciones;
 
 namespace CerberusBusinessService.Functions.Relevos
 {
@@ -33,7 +34,7 @@ namespace CerberusBusinessService.Functions.Relevos
 
 
         #region PROPIEDADES
-
+        private readonly RelevoNotificationFunctions _relevoNotificationFunctions;
         private readonly RelevoNoPlaneadoDataService _data;
         private readonly RelevoIntegracionAsistenciaFunctions _integracion;
         private readonly FileRelevoNoPlaneadoService _fileRelevoService;
@@ -46,11 +47,13 @@ namespace CerberusBusinessService.Functions.Relevos
         public RelevoSolicitudFunctions(
             RelevoNoPlaneadoDataService data,
             RelevoIntegracionAsistenciaFunctions integracion,
-            FileRelevoNoPlaneadoService fileRelevoService)
+            FileRelevoNoPlaneadoService fileRelevoService,
+            RelevoNotificationFunctions relevoNotificationFunctions)
         {
             _data = data;
             _integracion = integracion;
             _fileRelevoService = fileRelevoService;
+            _relevoNotificationFunctions = relevoNotificationFunctions;
         }
 
         #endregion
@@ -443,6 +446,7 @@ VALUES
                 long asistenciaSalienteId,
                 bool realizarCheckOut,
                 string numeroUsuario,
+                string accessToken,
                 CancellationToken ct)
         {
             var response =
@@ -533,9 +537,12 @@ VALUES
                     return response;
                 }
 
-                // ====================================================
+                numeroUsuario =
+                    numeroUsuario.Trim();
+
+                // ============================================================
                 // EVIDENCIA
-                // ====================================================
+                // ============================================================
 
                 string operacionId =
                     Guid.NewGuid().ToString("N");
@@ -559,9 +566,12 @@ VALUES
                     return response;
                 }
 
-                rutaEvidencia = upload.data;
+                rutaEvidencia =
+                    upload.data;
 
-                using var conn = _data.CrearConexion();
+                using var conn =
+                    _data.CrearConexion();
+
                 await conn.OpenAsync(ct);
 
                 transaction =
@@ -573,9 +583,9 @@ VALUES
                         ct,
                         transaction);
 
-                // ====================================================
+                // ============================================================
                 // ASIGNACION AFECTADA
-                // ====================================================
+                // ============================================================
 
                 ServicioEmpleadoRelevoDto? afectada =
                     await _data.ObtenerServicioEmpleadoAsync(
@@ -590,9 +600,9 @@ VALUES
                         "No existe la asignación del empleado que debía presentarse.");
                 }
 
-                // ====================================================
+                // ============================================================
                 // ASIGNACION SALIENTE
-                // ====================================================
+                // ============================================================
 
                 ServicioEmpleadoRelevoDto? saliente =
                     await _data.ObtenerServicioEmpleadoAsync(
@@ -614,9 +624,9 @@ VALUES
                         "La asignación afectada y la saliente pertenecen a servicios diferentes.");
                 }
 
-                // ====================================================
+                // ============================================================
                 // EVITAR SOLICITUD DUPLICADA
-                // ====================================================
+                // ============================================================
 
                 bool existeSolicitud =
                     await _data.ExisteSolicitudActivaAsync(
@@ -645,9 +655,9 @@ VALUES
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // CATALOGOS
-                // ====================================================
+                // ============================================================
 
                 const string sqlOrigen = @"
 SELECT TOP (1)
@@ -676,9 +686,9 @@ WHERE Clave = 'ASISTENCIA';";
                         "No están configurados los catálogos requeridos para el relevo por asistencia.");
                 }
 
-                // ====================================================
+                // ============================================================
                 // CREAR SOLICITUD
-                // ====================================================
+                // ============================================================
 
                 const string sqlSolicitud = @"
 INSERT INTO dbo.SolicitudRelevoNoPlaneado
@@ -745,14 +755,14 @@ VALUES
                                     fechaActual,
 
                                 UsuarioRegistro =
-                                    numeroUsuario.Trim()
+                                    numeroUsuario
                             },
                             transaction,
                             cancellationToken: ct));
 
-                // ====================================================
+                // ============================================================
                 // INCIDENCIA DE FALTA
-                // ====================================================
+                // ============================================================
 
                 await _integracion
                     .RegistrarIncidenciaFaltaRelevoAsync(
@@ -760,13 +770,13 @@ VALUES
                         transaction,
                         afectada,
                         data.FechaHoraInicioCobertura,
-                        numeroUsuario.Trim(),
+                        numeroUsuario,
                         fechaActual,
                         ct);
 
-                // ====================================================
+                // ============================================================
                 // CHECK-OUT SALIENTE
-                // ====================================================
+                // ============================================================
 
                 if (realizarCheckOut)
                 {
@@ -776,13 +786,22 @@ VALUES
                             transaction,
                             asistenciaSalienteId,
                             data.ServicioEmpleadoSalienteId.Value,
-                            numeroUsuario.Trim(),
+                            numeroUsuario,
                             fechaActual,
                             ct);
                 }
 
+                // ============================================================
+                // COMMIT
+                // ============================================================
+
                 transaction.Commit();
                 transaction = null;
+
+                string rutaEvidenciaPersistida =
+                    rutaEvidencia;
+
+                rutaEvidencia = null;
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -791,6 +810,9 @@ VALUES
                     realizarCheckOut
                         ? "Se creó la solicitud de relevo y se registró el Check-Out."
                         : "Se creó la solicitud de relevo correctamente.";
+
+                response.desc =
+                    "La solicitud quedó pendiente de asignación.";
 
                 response.data =
                     new SolicitudRelevoNoPlaneadoDto
@@ -826,16 +848,69 @@ VALUES
                                 : data.MotivoNoPermanencia.Trim(),
 
                         RutaFotoEvidencia =
-                            rutaEvidencia,
+                            rutaEvidenciaPersistida,
 
                         FechaRegistro =
                             fechaActual,
 
                         UsuarioRegistro =
-                            numeroUsuario.Trim()
+                            numeroUsuario
                     };
 
-                rutaEvidencia = null;
+                // ============================================================
+                // NOTIFICACION
+                //
+                // SOLO CUANDO EL EMPLEADO SALIENTE NO PUEDE PERMANECER.
+                //
+                // SI PUEDE PERMANECER:
+                // CrearExtensionAsync GENERARA
+                // RELEVO_EXTENSION_AUTORIZAR.
+                //
+                // SI NO PUEDE PERMANECER:
+                // LA SOLICITUD QUEDA LIBRE PARA QUE EL SUPERVISOR
+                // GESTIONE UNA NUEVA COBERTURA.
+                //
+                // SIEMPRE DESPUES DEL COMMIT.
+                // ============================================================
+
+                if (realizarCheckOut)
+                {
+                    try
+                    {
+                        var notificationResponse =
+                            await _relevoNotificationFunctions
+                                .NotificarCoberturaRequeridaAsync(
+                                    afectada.ServicioId,
+                                    afectada.NombreServicio,
+                                    solicitudId,
+                                    afectada.ServicioEmpleadoId,
+                                    data.FechaHoraInicioCobertura,
+                                    data.FechaHoraFinCobertura,
+                                    data.MotivoRelevo.Trim(),
+                                    "ASISTENCIA",
+                                    accessToken,
+                                    ct);
+
+                        if (notificationResponse.isSuccess)
+                        {
+                            response.desc +=
+                                " Se notificó a los supervisores del servicio.";
+                        }
+                        else
+                        {
+                            response.desc +=
+                                " No fue posible notificar a los supervisores. " +
+                                notificationResponse.message;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        response.desc +=
+                            " La solicitud y el Check-Out fueron registrados, " +
+                            "pero ocurrió un error al enviar la notificación: " +
+                            ex.Message;
+                    }
+                }
 
                 return response;
             }
@@ -897,19 +972,26 @@ VALUES
                 long supervisionId,
                 string motivoRelevo,
                 string numeroSupervisor,
+                string accessToken,
                 CancellationToken ct)
         {
-            var response = new ResponseModel<SolicitudRelevoNoPlaneadoDto>();
+            var response =
+                new ResponseModel<SolicitudRelevoNoPlaneadoDto>();
 
             SqlTransaction? transaction = null;
 
             try
             {
+                // ============================================================
+                // VALIDACIONES
+                // ============================================================
+
                 if (supervisionId <= 0)
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message = "SupervisionId es inválido.";
+                    response.message =
+                        "SupervisionId es inválido.";
                     response.data = null;
 
                     return response;
@@ -919,7 +1001,8 @@ VALUES
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message = "El motivo del retiro del elemento es obligatorio.";
+                    response.message =
+                        "El motivo del retiro del elemento es obligatorio.";
                     response.data = null;
 
                     return response;
@@ -929,18 +1012,23 @@ VALUES
                 {
                     response.isSuccess = false;
                     response.code = 401;
-                    response.message = "No fue posible identificar al supervisor.";
+                    response.message =
+                        "No fue posible identificar al supervisor.";
                     response.data = null;
 
                     return response;
                 }
 
-                numeroSupervisor = numeroSupervisor.Trim();
+                numeroSupervisor =
+                    numeroSupervisor.Trim();
 
-                using var conn = _data.CrearConexion();
+                using var conn =
+                    _data.CrearConexion();
+
                 await conn.OpenAsync(ct);
 
-                transaction = conn.BeginTransaction();
+                transaction =
+                    conn.BeginTransaction();
 
                 DateTime fechaActual =
                     await _data.ObtenerFechaServidorAsync(
@@ -993,12 +1081,14 @@ INNER JOIN dbo.Supervision_Comprobacion C
 WHERE S.SupervisionId = @SupervisionId;";
 
                 RelevoSupervisionDataDto? supervision =
-                    await conn.QueryFirstOrDefaultAsync<RelevoSupervisionDataDto>(
+                    await conn.QueryFirstOrDefaultAsync<
+                        RelevoSupervisionDataDto>(
                         new CommandDefinition(
                             sqlSupervision,
                             new
                             {
-                                SupervisionId = supervisionId
+                                SupervisionId =
+                                    supervisionId
                             },
                             transaction,
                             cancellationToken: ct));
@@ -1010,13 +1100,19 @@ WHERE S.SupervisionId = @SupervisionId;";
 
                     response.isSuccess = false;
                     response.code = 404;
-                    response.message = "No existe la supervisión indicada.";
+                    response.message =
+                        "No existe la supervisión indicada.";
                     response.data = null;
 
                     return response;
                 }
 
-                if (supervision.SupervisorEmpleadoId != supervisor.EmpleadoId)
+                // ============================================================
+                // VALIDAR AUTOR DE LA SUPERVISION
+                // ============================================================
+
+                if (supervision.SupervisorEmpleadoId !=
+                    supervisor.EmpleadoId)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1030,7 +1126,12 @@ WHERE S.SupervisionId = @SupervisionId;";
                     return response;
                 }
 
-                if (string.IsNullOrWhiteSpace(supervision.RutaFotoEmpleado))
+                // ============================================================
+                // EVIDENCIA
+                // ============================================================
+
+                if (string.IsNullOrWhiteSpace(
+                    supervision.RutaFotoEmpleado))
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1097,7 +1198,8 @@ WHERE S.SupervisionId = @SupervisionId;";
                     return response;
                 }
 
-                if (asistencia.FechaHoraSalidaProgramada <= fechaActual)
+                if (asistencia.FechaHoraSalidaProgramada <=
+                    fechaActual)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1113,10 +1215,6 @@ WHERE S.SupervisionId = @SupervisionId;";
 
                 // ============================================================
                 // EVITAR SOLICITUD ACTIVA DUPLICADA
-                //
-                // ExisteSolicitudActivaAsync considera únicamente solicitudes:
-                // PENDIENTE_ASIGNACION / EN_PROCESO
-                // cuya FechaHoraFinCobertura todavía no haya vencido.
                 // ============================================================
 
                 bool existeSolicitud =
@@ -1164,7 +1262,8 @@ WHERE Clave = 'SUPERVISION';";
                         ct,
                         transaction);
 
-                if (!origenId.HasValue || !estatusId.HasValue)
+                if (!origenId.HasValue ||
+                    !estatusId.HasValue)
                 {
                     throw new InvalidOperationException(
                         "No están configurados los catálogos requeridos para el relevo por supervisión.");
@@ -1248,15 +1347,24 @@ VALUES
                 // RETIRAR ELEMENTO DEL TURNO
                 // ============================================================
 
-                await _integracion.FinalizarAsistenciaPorSupervisionAsync(
-                    conn,
-                    transaction,
-                    asistencia.AsistenciaId,
-                    fechaActual,
-                    ct);
+                await _integracion
+                    .FinalizarAsistenciaPorSupervisionAsync(
+                        conn,
+                        transaction,
+                        asistencia.AsistenciaId,
+                        fechaActual,
+                        ct);
+
+                // ============================================================
+                // COMMIT
+                // ============================================================
 
                 transaction.Commit();
                 transaction = null;
+
+                // ============================================================
+                // RESPONSE
+                // ============================================================
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -1304,6 +1412,63 @@ VALUES
                         UsuarioRegistro =
                             numeroSupervisor
                     };
+
+                // ============================================================
+                // NOTIFICAR COBERTURA REQUERIDA
+                //
+                // EL RETIRO Y LA SOLICITUD YA ESTAN COMMITTEADOS.
+                // UNA FALLA DE NOTIFICACIONES NO REVIERTE LA OPERACION.
+                // ============================================================
+
+                try
+                {
+                    ServicioEmpleadoRelevoDto? servicioAfectado =
+                        await _data.ObtenerServicioEmpleadoAsync(
+                            conn,
+                            supervision.ServicioEmpleadoId,
+                            ct);
+
+                    if (servicioAfectado == null)
+                    {
+                        response.desc +=
+                            " No fue posible obtener los datos del servicio para enviar la notificación.";
+                    }
+                    else
+                    {
+                        var notificationResponse =
+                            await _relevoNotificationFunctions
+                                .NotificarCoberturaRequeridaAsync(
+                                    servicioAfectado.ServicioId,
+                                    servicioAfectado.NombreServicio,
+                                    solicitudId,
+                                    supervision.ServicioEmpleadoId,
+                                    fechaActual,
+                                    asistencia.FechaHoraSalidaProgramada,
+                                    motivoRelevo.Trim(),
+                                    "SUPERVISION",
+                                    accessToken,
+                                    ct);
+
+                        if (notificationResponse.isSuccess)
+                        {
+                            response.desc +=
+                                " Se notificó a los supervisores del servicio.";
+                        }
+                        else
+                        {
+                            response.desc +=
+                                " No fue posible notificar a los supervisores. " +
+                                notificationResponse.message;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    response.desc +=
+                        " El retiro y la solicitud fueron registrados, " +
+                        "pero ocurrió un error al enviar la notificación: " +
+                        ex.Message;
+                }
 
                 return response;
             }

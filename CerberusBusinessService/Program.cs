@@ -88,6 +88,7 @@ builder.Services.AddScoped<RelevoSolicitudFunctions>();
 builder.Services.AddScoped<RelevoAsignacionFunctions>();
 builder.Services.AddScoped<RelevoConsultaFunctions>();
 builder.Services.AddScoped<RelevoNoPlaneadoFunctions>();
+builder.Services.AddScoped<RelevoNotificationFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;

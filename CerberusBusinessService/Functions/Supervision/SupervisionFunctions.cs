@@ -1068,6 +1068,7 @@ WHERE AsistenciaId = @AsistenciaSalienteId
                 long supervisionId,
                 string motivoRelevo,
                 string numeroSupervisor,
+                string accessToken,
                 CancellationToken ct)
         {
             return await _relevoNoPlaneadoFunctions
@@ -1075,6 +1076,7 @@ WHERE AsistenciaId = @AsistenciaSalienteId
                     supervisionId,
                     motivoRelevo,
                     numeroSupervisor,
+                    accessToken,
                     ct);
         }
 
