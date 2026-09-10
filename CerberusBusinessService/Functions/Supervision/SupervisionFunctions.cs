@@ -2,6 +2,8 @@
 using CerberusBusinessService.Models.DTO.Supervision;
 using CerberusBusinessService.Functions.Notificaciones;
 using CerberusBusinessService.Models.DTO.Notificaciones;
+using CerberusBusinessService.Functions.Relevos;
+using CerberusBusinessService.Models.DTO.Relevos;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
@@ -17,7 +19,7 @@ namespace CerberusBusinessService.Functions.Supervision
 
 
         #region PROPIEDADES
-
+        private readonly RelevoNoPlaneadoFunctions _relevoNoPlaneadoFunctions;
         private readonly string _csCerberus;
 
         #endregion
@@ -26,13 +28,17 @@ namespace CerberusBusinessService.Functions.Supervision
         #region CONSTRUCTOR
 
         public SupervisionFunctions(
-            IConfiguration config, NotificationClient notificationClient)
+            IConfiguration config,
+            NotificationClient notificationClient,
+            RelevoNoPlaneadoFunctions relevoNoPlaneadoFunctions)
         {
             _csCerberus =
                 config.GetConnectionString("DefaultConnection")
                 ?? throw new InvalidOperationException(
                     "No existe la cadena DefaultConnection.");
+
             _notificationClient = notificationClient;
+            _relevoNoPlaneadoFunctions = relevoNoPlaneadoFunctions;
         }
 
         #endregion
@@ -1049,6 +1055,26 @@ WHERE AsistenciaId = @AsistenciaSalienteId
                 .SendAsync(
                     request,
                     accessToken,
+                    ct);
+        }
+
+        #endregion
+
+
+        #region RETIRAR ELEMENTO Y SOLICITAR RELEVO
+
+        public async Task<ResponseModel<SolicitudRelevoNoPlaneadoDto>>
+            RetirarElementoAsync(
+                long supervisionId,
+                string motivoRelevo,
+                string numeroSupervisor,
+                CancellationToken ct)
+        {
+            return await _relevoNoPlaneadoFunctions
+                .CrearSolicitudDesdeSupervisionAsync(
+                    supervisionId,
+                    motivoRelevo,
+                    numeroSupervisor,
                     ct);
         }
 

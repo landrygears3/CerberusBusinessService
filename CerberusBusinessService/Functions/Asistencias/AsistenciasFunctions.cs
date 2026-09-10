@@ -1,7 +1,10 @@
 ﻿using CerberusBusinessService.Functions.Notificaciones;
 using CerberusBusinessService.Functions.R2;
+using CerberusBusinessService.Functions.Relevos;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Asistencias;
+using CerberusBusinessService.Functions.Relevos;
+using CerberusBusinessService.Models.DTO.Relevos;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
@@ -24,26 +27,22 @@ namespace CerberusBusinessService.Functions.Asistencias
 
         private readonly ServicioNotificationFunctions
             _servicioNotificationFunctions;
-
+        private readonly RelevoNoPlaneadoFunctions _relevoNoPlaneadoFunctions;
 
         public AsistenciasFunctions(
             IConfiguration config,
             FileAsistenciaService fileAsistenciaService,
-            ServicioNotificationFunctions servicioNotificationFunctions)
+            ServicioNotificationFunctions servicioNotificationFunctions,
+            RelevoNoPlaneadoFunctions relevoNoPlaneadoFunctions)
         {
             _csCerberus =
-                config.GetConnectionString(
-                    "DefaultConnection")
+                config.GetConnectionString("DefaultConnection")
                 ?? throw new InvalidOperationException(
                     "No existe la cadena DefaultConnection.");
 
-
-            _fileAsistenciaService =
-                fileAsistenciaService;
-
-
-            _servicioNotificationFunctions =
-                servicioNotificationFunctions;
+            _fileAsistenciaService = fileAsistenciaService;
+            _servicioNotificationFunctions = servicioNotificationFunctions;
+            _relevoNoPlaneadoFunctions = relevoNoPlaneadoFunctions;
         }
 
 
@@ -2758,5 +2757,727 @@ VALUES
                     estatusDescripcion
             };
         }
+
+        #region RELEVOS ESPERADOS CHECKOUT
+
+        public async Task<ResponseModel<List<RelevoEsperadoCheckOutResponse>>>
+            ObtenerRelevosEsperadosCheckOutAsync(
+                string numeroUsuario,
+                CancellationToken ct)
+        {
+            var response =
+                new ResponseModel<List<RelevoEsperadoCheckOutResponse>>();
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                {
+                    response.isSuccess = false;
+                    response.code = 401;
+                    response.message =
+                        "No fue posible identificar al empleado.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                using var conn =
+                    new SqlConnection(_csCerberus);
+
+                await conn.OpenAsync(ct);
+
+                AsistenciaActivaCheckOutDto? asistencia =
+                    await ObtenerAsistenciaActivaCheckOutAsync(
+                        conn,
+                        numeroUsuario.Trim(),
+                        null,
+                        ct);
+
+                if (asistencia == null)
+                {
+                    response.isSuccess = false;
+                    response.code = 404;
+                    response.message =
+                        "El empleado no tiene una asistencia activa.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                List<RelevoEsperadoCheckOutResponse> relevos =
+                    await ObtenerRelevosEsperadosAsync(
+                        conn,
+                        asistencia,
+                        ct);
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message =
+                    "Relevos esperados obtenidos correctamente.";
+                response.desc = null;
+                response.data = relevos;
+
+                return response;
+            }
+            catch (SqlException ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error SQL al obtener los relevos esperados.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error al obtener los relevos esperados.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+        }
+
+        #endregion
+
+        #region CONSULTAR RELEVOS ESPERADOS
+
+        private async Task<List<RelevoEsperadoCheckOutResponse>>
+            ObtenerRelevosEsperadosAsync(
+                SqlConnection conn,
+                AsistenciaActivaCheckOutDto asistencia,
+                CancellationToken ct)
+        {
+            DateTime fechaRelevo =
+                asistencia.FechaHoraSalidaProgramada.Date;
+
+            TimeSpan horaRelevo =
+                asistencia.FechaHoraSalidaProgramada.TimeOfDay;
+
+            const string sql = @"
+SELECT
+    SE.ServicioEmpleadoId,
+    SE.EmpleadoId,
+
+    ISNULL(
+        LTRIM(RTRIM(E.UsuarioAsignado)),
+        ''
+    ) AS NumeroUsuario,
+
+    CONCAT_WS(
+        ' ',
+        NULLIF(LTRIM(RTRIM(E.Nombres)), ''),
+        NULLIF(LTRIM(RTRIM(E.ApellidoPaterno)), ''),
+        NULLIF(LTRIM(RTRIM(E.ApellidoMaterno)), '')
+    ) AS NombreCompleto,
+
+    DATEADD(
+        SECOND,
+        DATEDIFF(
+            SECOND,
+            CAST('00:00:00' AS TIME),
+            SE.HoraEntrada
+        ),
+        CAST(@FechaRelevo AS DATETIME2)
+    ) AS FechaHoraEntradaProgramada,
+
+    DATEADD(
+        DAY,
+        CASE
+            WHEN SE.SalidaDiaSiguiente = 1 THEN 1
+            ELSE 0
+        END,
+        DATEADD(
+            SECOND,
+            DATEDIFF(
+                SECOND,
+                CAST('00:00:00' AS TIME),
+                SE.HoraSalida
+            ),
+            CAST(@FechaRelevo AS DATETIME2)
+        )
+    ) AS FechaHoraSalidaProgramada,
+
+    A.AsistenciaId,
+    A.Estatus AS EstatusAsistencia
+
+FROM dbo.ServicioEmpleado SE
+
+INNER JOIN dbo.DatosGeneralesEmpleado E
+    ON E.ID = SE.EmpleadoId
+
+OUTER APPLY
+(
+    SELECT TOP (1)
+        ASI.AsistenciaId,
+        ASI.Estatus
+    FROM dbo.Asistencia ASI
+    WHERE ASI.ServicioEmpleadoId =
+          SE.ServicioEmpleadoId
+      AND ASI.FechaTurno =
+          @FechaRelevo
+    ORDER BY
+        ASI.AsistenciaId DESC
+) A
+
+WHERE SE.ServicioId =
+      @ServicioId
+
+  AND SE.ServicioEmpleadoId <>
+      @ServicioEmpleadoActualId
+
+  AND SE.FechaInicio <=
+      @FechaRelevo
+
+  AND
+  (
+      SE.FechaFin IS NULL
+      OR SE.FechaFin >= @FechaRelevo
+  )
+
+  AND SE.HoraEntrada =
+      @HoraRelevo
+
+ORDER BY
+    SE.ServicioEmpleadoId;";
+
+            var result =
+                await conn.QueryAsync<
+                    RelevoEsperadoCheckOutResponse>(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            ServicioId =
+                                asistencia.ServicioId,
+
+                            ServicioEmpleadoActualId =
+                                asistencia.ServicioEmpleadoId,
+
+                            FechaRelevo =
+                                fechaRelevo,
+
+                            HoraRelevo =
+                                horaRelevo
+                        },
+                        cancellationToken: ct));
+
+            return result.ToList();
+        }
+
+        #endregion
+
+        #region ASISTENCIA ACTIVA CHECKOUT
+
+        private async Task<AsistenciaActivaCheckOutDto?>
+            ObtenerAsistenciaActivaCheckOutAsync(
+                SqlConnection conn,
+                string numeroUsuario,
+                SqlTransaction? transaction,
+                CancellationToken ct)
+        {
+            const string sql = @"
+SELECT TOP (1)
+    AsistenciaId,
+    ServicioId,
+    ServicioEmpleadoId,
+    NumeroEmpleadoEntrante,
+    FechaTurno,
+    FechaHoraEntradaProgramada,
+    FechaHoraSalidaProgramada,
+    FechaHoraCheckIn,
+    Estatus
+FROM dbo.Asistencia WITH (UPDLOCK, HOLDLOCK)
+WHERE NumeroEmpleadoEntrante = @NumeroUsuario
+  AND Estatus = @EstatusEnTurno
+  AND FechaHoraCheckOut IS NULL
+ORDER BY
+    FechaHoraCheckIn DESC,
+    AsistenciaId DESC;";
+
+            return await conn.QueryFirstOrDefaultAsync<
+                AsistenciaActivaCheckOutDto>(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            NumeroUsuario =
+                                numeroUsuario,
+
+                            EstatusEnTurno =
+                                ESTATUS_EN_TURNO
+                        },
+                        transaction,
+                        cancellationToken: ct));
+        }
+
+        #endregion
+
+        #region CHECKOUT SIN RELEVO
+
+        public async Task<ResponseModel<CheckOutRelevoResponse>>
+            ProcesarCheckOutSinRelevoAsync(
+                CheckOutRelevoRequest data,
+                string numeroUsuario,
+                CancellationToken ct)
+        {
+            var response = new ResponseModel<CheckOutRelevoResponse>();
+
+            try
+            {
+                // ============================================================
+                // VALIDAR USUARIO
+                // ============================================================
+
+                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                {
+                    response.isSuccess = false;
+                    response.code = 401;
+                    response.message = "No fue posible identificar al empleado.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                numeroUsuario = numeroUsuario.Trim();
+
+                // ============================================================
+                // VALIDAR REQUEST
+                // ============================================================
+
+                if (data == null)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message = "El request es obligatorio.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                if (data.ServicioEmpleadoAfectadoId <= 0)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message = "ServicioEmpleadoAfectadoId es inválido.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                if (data.FotoEvidencia == null ||
+                    data.FotoEvidencia.Length == 0)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message = "La fotografía de evidencia es obligatoria.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                if (!data.PuedePermanecer &&
+                    string.IsNullOrWhiteSpace(data.MotivoNoPermanencia))
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "El motivo por el cual el empleado no puede permanecer es obligatorio.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                // ============================================================
+                // CONEXION
+                // ============================================================
+
+                using var conn = new SqlConnection(_csCerberus);
+
+                await conn.OpenAsync(ct);
+
+                // ============================================================
+                // ASISTENCIA ACTIVA DEL EMPLEADO SALIENTE
+                // ============================================================
+
+                AsistenciaActivaCheckOutDto? asistencia =
+                    await ObtenerAsistenciaActivaCheckOutAsync(
+                        conn,
+                        numeroUsuario,
+                        null,
+                        ct);
+
+                if (asistencia == null)
+                {
+                    response.isSuccess = false;
+                    response.code = 404;
+                    response.message =
+                        "El empleado no tiene una asistencia activa.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                // ============================================================
+                // OBTENER RELEVOS ESPERADOS DEL SIGUIENTE TURNO
+                // ============================================================
+
+                List<RelevoEsperadoCheckOutResponse> relevosEsperados =
+                    await ObtenerRelevosEsperadosAsync(
+                        conn,
+                        asistencia,
+                        ct);
+
+                RelevoEsperadoCheckOutResponse? relevoAfectado =
+                    relevosEsperados.FirstOrDefault(
+                        x => x.ServicioEmpleadoId ==
+                             data.ServicioEmpleadoAfectadoId);
+
+                if (relevoAfectado == null)
+                {
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "La asignación seleccionada no corresponde al siguiente turno de este servicio.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                // ============================================================
+                // EL EMPLEADO SALIENTE NO PUEDE SER EL MISMO DEL TURNO
+                // QUE SE ESTA MARCANDO COMO AUSENTE
+                // ============================================================
+
+                if (string.Equals(
+                    relevoAfectado.NumeroUsuario,
+                    numeroUsuario,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "La asignación del siguiente turno pertenece al mismo empleado.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                // ============================================================
+                // VALIDAR QUE EL RELEVO NO HAYA REALIZADO YA CHECK-IN
+                // ============================================================
+
+                if (relevoAfectado.AsistenciaId.HasValue)
+                {
+                    if (relevoAfectado.EstatusAsistencia ==
+                        ESTATUS_PENDIENTE_AUTORIZAR)
+                    {
+                        response.isSuccess = false;
+                        response.code = 409;
+                        response.message =
+                            "El empleado de relevo ya realizó Check-In y está pendiente de autorización.";
+                        response.data = null;
+
+                        return response;
+                    }
+
+                    if (relevoAfectado.EstatusAsistencia ==
+                        ESTATUS_EN_TURNO)
+                    {
+                        response.isSuccess = false;
+                        response.code = 409;
+                        response.message =
+                            "El empleado de relevo ya se encuentra en turno.";
+                        response.data = null;
+
+                        return response;
+                    }
+                }
+
+                // ============================================================
+                // ARMAR SOLICITUD DE RELEVO
+                // ============================================================
+
+                var solicitudRequest =
+                    new CrearSolicitudRelevoNoPlaneadoDto
+                    {
+                        ServicioEmpleadoAfectadoId =
+                            relevoAfectado.ServicioEmpleadoId,
+
+                        ServicioEmpleadoSalienteId =
+                            asistencia.ServicioEmpleadoId,
+
+                        OrigenClave =
+                            "ASISTENCIA",
+
+                        FechaHoraInicioCobertura =
+                            relevoAfectado.FechaHoraEntradaProgramada,
+
+                        FechaHoraFinCobertura =
+                            relevoAfectado.FechaHoraSalidaProgramada,
+
+                        MotivoRelevo =
+                            "El empleado programado para el siguiente turno no se presentó al relevo.",
+
+                        MotivoNoPermanencia =
+                            data.PuedePermanecer
+                                ? null
+                                : data.MotivoNoPermanencia!.Trim(),
+
+                        FotoEvidencia =
+                            data.FotoEvidencia
+                    };
+
+                // ============================================================
+                // CREAR SOLICITUD
+                //
+                // ESTE METODO REALIZA EN UNA MISMA TRANSACCION:
+                //
+                // - SOLICITUD DE RELEVO
+                // - INCIDENCIA DEL EMPLEADO AUSENTE
+                // - CHECK-OUT DEL SALIENTE CUANDO NO PUEDE PERMANECER
+                // ============================================================
+
+                ResponseModel<SolicitudRelevoNoPlaneadoDto> solicitudResponse =
+                    await _relevoNoPlaneadoFunctions
+                        .CrearSolicitudDesdeAsistenciaAsync(
+                            solicitudRequest,
+                            asistencia.AsistenciaId,
+                            realizarCheckOut: !data.PuedePermanecer,
+                            numeroUsuario,
+                            ct);
+
+                if (!solicitudResponse.isSuccess ||
+                    solicitudResponse.data == null)
+                {
+                    response.isSuccess = false;
+                    response.code = solicitudResponse.code;
+                    response.message = solicitudResponse.message;
+                    response.desc = solicitudResponse.desc;
+                    response.data = null;
+
+                    return response;
+                }
+
+                long solicitudId =
+                    solicitudResponse.data
+                        .SolicitudRelevoNoPlaneadoId;
+
+                // ============================================================
+                // EL EMPLEADO PUEDE PERMANECER
+                //
+                // SE CREA PROPUESTA DE EXTENSION.
+                //
+                // TODAVIA NO SE HACE CHECK-OUT.
+                // TODAVIA NO SE CREA EL SERVICIO EMPLEADO TEMPORAL.
+                // TODAVIA NO SE CREA LA ASISTENCIA DE EXTENSION.
+                // ============================================================
+
+                if (data.PuedePermanecer)
+                {
+                    ResponseModel<RelevoNoPlaneadoAsignacionDto>
+                        extensionResponse =
+                            await _relevoNoPlaneadoFunctions
+                                .CrearExtensionAsync(
+                                    solicitudId,
+                                    numeroUsuario,
+                                    ct);
+
+                    if (!extensionResponse.isSuccess ||
+                        extensionResponse.data == null)
+                    {
+                        response.isSuccess = false;
+                        response.code = extensionResponse.code;
+                        response.message =
+                            "La solicitud de relevo fue creada, pero no fue posible crear la propuesta de extensión.";
+                        response.desc =
+                            extensionResponse.message;
+
+                        response.data =
+                            new CheckOutRelevoResponse
+                            {
+                                AsistenciaId =
+                                    asistencia.AsistenciaId,
+
+                                ServicioId =
+                                    asistencia.ServicioId,
+
+                                ServicioEmpleadoSalienteId =
+                                    asistencia.ServicioEmpleadoId,
+
+                                ServicioEmpleadoAfectadoId =
+                                    relevoAfectado.ServicioEmpleadoId,
+
+                                SolicitudRelevoNoPlaneadoId =
+                                    solicitudId,
+
+                                RelevoNoPlaneadoAsignacionId =
+                                    null,
+
+                                PuedePermanecer =
+                                    true,
+
+                                CheckOutRealizado =
+                                    false,
+
+                                FechaHoraCheckOut =
+                                    null,
+
+                                SolicitudEstatusClave =
+                                    "PENDIENTE_ASIGNACION",
+
+                                AsignacionEstatusClave =
+                                    null
+                            };
+
+                        return response;
+                    }
+
+                    response.isSuccess = true;
+                    response.code = 200;
+                    response.message =
+                        "La solicitud de relevo y la propuesta de extensión fueron creadas correctamente.";
+                    response.desc =
+                        "La extensión quedó pendiente de autorización del supervisor.";
+
+                    response.data =
+                        new CheckOutRelevoResponse
+                        {
+                            AsistenciaId =
+                                asistencia.AsistenciaId,
+
+                            ServicioId =
+                                asistencia.ServicioId,
+
+                            ServicioEmpleadoSalienteId =
+                                asistencia.ServicioEmpleadoId,
+
+                            ServicioEmpleadoAfectadoId =
+                                relevoAfectado.ServicioEmpleadoId,
+
+                            SolicitudRelevoNoPlaneadoId =
+                                solicitudId,
+
+                            RelevoNoPlaneadoAsignacionId =
+                                extensionResponse.data
+                                    .RelevoNoPlaneadoAsignacionId,
+
+                            PuedePermanecer =
+                                true,
+
+                            CheckOutRealizado =
+                                false,
+
+                            FechaHoraCheckOut =
+                                null,
+
+                            SolicitudEstatusClave =
+                                "EN_PROCESO",
+
+                            AsignacionEstatusClave =
+                                "PENDIENTE_SUPERVISOR"
+                        };
+
+                    return response;
+                }
+
+                // ============================================================
+                // EL EMPLEADO NO PUEDE PERMANECER
+                //
+                // EL CHECK-OUT YA SE REALIZO DENTRO DE
+                // CrearSolicitudDesdeAsistenciaAsync.
+                //
+                // EN ESA MISMA TRANSACCION TAMBIEN SE CREARON:
+                //
+                // - SOLICITUD
+                // - INCIDENCIA DE FALTA
+                // ============================================================
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message =
+                    "Check-Out registrado correctamente.";
+                response.desc =
+                    "Se registró la falta del empleado entrante y la solicitud de relevo quedó pendiente de asignación.";
+
+                response.data =
+                    new CheckOutRelevoResponse
+                    {
+                        AsistenciaId =
+                            asistencia.AsistenciaId,
+
+                        ServicioId =
+                            asistencia.ServicioId,
+
+                        ServicioEmpleadoSalienteId =
+                            asistencia.ServicioEmpleadoId,
+
+                        ServicioEmpleadoAfectadoId =
+                            relevoAfectado.ServicioEmpleadoId,
+
+                        SolicitudRelevoNoPlaneadoId =
+                            solicitudId,
+
+                        RelevoNoPlaneadoAsignacionId =
+                            null,
+
+                        PuedePermanecer =
+                            false,
+
+                        CheckOutRealizado =
+                            true,
+
+                        FechaHoraCheckOut =
+                            solicitudResponse.data.FechaRegistro,
+
+                        SolicitudEstatusClave =
+                            "PENDIENTE_ASIGNACION",
+
+                        AsignacionEstatusClave =
+                            null
+                    };
+
+                return response;
+            }
+            catch (OperationCanceledException)
+            {
+                response.isSuccess = false;
+                response.code = 408;
+                response.message =
+                    "La operación de Check-Out sin relevo fue cancelada.";
+                response.data = null;
+
+                return response;
+            }
+            catch (SqlException ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error SQL al procesar el Check-Out sin relevo.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error al procesar el Check-Out sin relevo.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+        }
+
+        #endregion
     }
 }

@@ -14,6 +14,7 @@ using CerberusBusinessService.Models.R2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using CerberusBusinessService.Functions.Relevos;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -74,12 +75,14 @@ builder.Services.AddScoped<EliminadoDomicilioFunctions>();
 builder.Services.AddScoped<FileEmpleadoService>();
 builder.Services.AddScoped<FileCandidatoService>();
 builder.Services.AddScoped<FileAsistenciaService>();
+builder.Services.AddScoped<FileRelevoNoPlaneadoService>();
 builder.Services.AddScoped<AsistenciasFunctions>();
 builder.Services.AddScoped<CandidatosFunctions>();
 builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddScoped<NotificationClient>();
 builder.Services.AddScoped<ServicioNotificationFunctions>();
 builder.Services.AddScoped<SupervisionFunctions>();
+builder.Services.AddScoped<RelevoNoPlaneadoFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
