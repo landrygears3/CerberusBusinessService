@@ -6,6 +6,7 @@ using CerberusBusinessService.Functions.Candidatos;
 using CerberusBusinessService.Functions.Contratacion;
 using CerberusBusinessService.Functions.Notificaciones;
 using CerberusBusinessService.Functions.R2;
+using CerberusBusinessService.Functions.Relevos;
 using CerberusBusinessService.Functions.Supervision;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
@@ -14,21 +15,30 @@ using CerberusBusinessService.Models.R2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using CerberusBusinessService.Functions.Relevos;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
-// ===== JWT settings =====
+
+#region CONFIGURACION
+
 var jwtSettings = new JwtSettings();
 builder.Configuration.GetSection("JwtSettings").Bind(jwtSettings);
-builder.Services.Configure<R2Settings>(
-    builder.Configuration.GetSection("R2")
-);
+
+builder.Services.Configure<R2Settings>(builder.Configuration.GetSection("R2"));
 builder.Services.Configure<WsOptions>(builder.Configuration.GetSection("WebServices:Abac"));
-builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("DefaultConnection")));
-builder.Services.AddSingleton(new ConnectionStringProvider(builder.Configuration.GetConnectionString("CerberusConfig")));
+builder.Services.Configure<NotificationOptions>(builder.Configuration.GetSection("WebServices:Notificaciones"));
+
+builder.Services.AddSingleton(new ConnectionStringProvider(
+    builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddSingleton(new ConnectionStringProvider(
+    builder.Configuration.GetConnectionString("CerberusConfig")));
+
 builder.Services.AddSingleton(jwtSettings);
-// ===== R2 =====
+
+#endregion
+
+#region R2
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
@@ -43,11 +53,13 @@ builder.Services.AddSingleton<IAmazonS3>(sp =>
     return new AmazonS3Client(
         settings.AccessKey,
         settings.SecretKey,
-        config
-    );
+        config);
 });
 
-// ===== Auth JWT =====
+#endregion
+
+#region AUTENTICACION
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -63,32 +75,75 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtSettings.Issuer,
         ValidAudience = jwtSettings.Audience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key)),
+        IssuerSigningKey = new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(jwtSettings.Key)),
         ClockSkew = TimeSpan.Zero
     };
 });
+
+builder.Services.AddAuthorization();
+
+#endregion
+
+#region EMPLEADOS
+
 builder.Services.AddScoped<ListadoEmpleadosFunctions>();
 builder.Services.AddScoped<EditarEmpleadoFunctions>();
 builder.Services.AddScoped<AltaDomiciliosFunctions>();
 builder.Services.AddScoped<ListadoDomiciliosFunctions>();
 builder.Services.AddScoped<EliminadoDomicilioFunctions>();
+
+#endregion
+
+#region CANDIDATOS
+
+builder.Services.AddScoped<CandidatosFunctions>();
+builder.Services.AddScoped<SaludFunctions>();
+
+#endregion
+
+#region ARCHIVOS
+
 builder.Services.AddScoped<FileEmpleadoService>();
 builder.Services.AddScoped<FileCandidatoService>();
 builder.Services.AddScoped<FileAsistenciaService>();
 builder.Services.AddScoped<FileRelevoNoPlaneadoService>();
-builder.Services.AddScoped<AsistenciasFunctions>();
-builder.Services.AddScoped<CandidatosFunctions>();
-builder.Services.AddScoped<SaludFunctions>();
+
+#endregion
+
+#region NOTIFICACIONES
+
 builder.Services.AddScoped<NotificationClient>();
 builder.Services.AddScoped<ServicioNotificationFunctions>();
+builder.Services.AddScoped<RelevoNotificationFunctions>();
+
+#endregion
+
+#region ASISTENCIAS
+
+builder.Services.AddScoped<AsistenciasFunctions>();
+
+#endregion
+
+#region SUPERVISION
+
 builder.Services.AddScoped<SupervisionFunctions>();
+
+#endregion
+
+#region RELEVOS NO PLANEADOS
+
 builder.Services.AddScoped<RelevoNoPlaneadoDataService>();
 builder.Services.AddScoped<RelevoIntegracionAsistenciaFunctions>();
 builder.Services.AddScoped<RelevoSolicitudFunctions>();
 builder.Services.AddScoped<RelevoAsignacionFunctions>();
 builder.Services.AddScoped<RelevoConsultaFunctions>();
 builder.Services.AddScoped<RelevoNoPlaneadoFunctions>();
-builder.Services.AddScoped<RelevoNotificationFunctions>();
+
+#endregion
+
+#region HTTP CLIENTS
+
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
@@ -97,6 +152,7 @@ builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
     http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
+
 builder.Services.AddHttpClient<AltaEmpleadoFuncions>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
@@ -105,6 +161,7 @@ builder.Services.AddHttpClient<AltaEmpleadoFuncions>((sp, http) =>
     http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
+
 builder.Services.AddHttpClient<ContratacionCandidatoFunctions>((sp, http) =>
 {
     var opt = sp.GetRequiredService<IOptions<WsOptions>>().Value;
@@ -113,28 +170,29 @@ builder.Services.AddHttpClient<ContratacionCandidatoFunctions>((sp, http) =>
     http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
-builder.Services.Configure<NotificationOptions>(
-    builder.Configuration.GetSection(
-        "WebServices:Notificaciones"));
-builder.Services.AddHttpContextAccessor();
-builder.Services.AddAuthorization();
-// Add services to the container.
 
+#endregion
+
+#region ASP.NET
+
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-//builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+#endregion
+
+#region APP
+
 var app = builder.Build();
+
 app.UsePathBase("/Negocio");
-// Configure the HTTP request pipeline.
+
 if (app.Environment.IsDevelopment())
 {
-    //app.MapOpenApi();
     app.UseDeveloperExceptionPage();
     app.UseSwagger();
-    app.UseSwaggerUI(); // UI en /swagger
+    app.UseSwaggerUI();
 }
 
 app.UseHttpsRedirection();
@@ -144,3 +202,5 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+#endregion
