@@ -82,6 +82,11 @@ builder.Services.AddScoped<SaludFunctions>();
 builder.Services.AddScoped<NotificationClient>();
 builder.Services.AddScoped<ServicioNotificationFunctions>();
 builder.Services.AddScoped<SupervisionFunctions>();
+builder.Services.AddScoped<RelevoNoPlaneadoDataService>();
+builder.Services.AddScoped<RelevoIntegracionAsistenciaFunctions>();
+builder.Services.AddScoped<RelevoSolicitudFunctions>();
+builder.Services.AddScoped<RelevoAsignacionFunctions>();
+builder.Services.AddScoped<RelevoConsultaFunctions>();
 builder.Services.AddScoped<RelevoNoPlaneadoFunctions>();
 builder.Services.AddHttpClient<ValidaAccionFunction>((sp, http) =>
 {
