@@ -3092,12 +3092,17 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
             DateTime fechaHoraInicio,
             DateTime fechaHoraFin)
         {
+            string inicio =
+                fechaHoraInicio.ToString("dd/MM/yyyy HH:mm");
+
+            string fin =
+                fechaHoraFin.ToString("dd/MM/yyyy HH:mm");
+
             return
                 $"Yo, {nombreEmpleado.Trim()}, acepto permanecer en el servicio " +
-                $"{nombreServicio.Trim()} por necesidades operativas de manera " +
-                $"voluntaria y eventual, sin que constituya jornada habitual. " +
-                $"Cubriendo del {fechaHoraInicio:dd/MM/yyyy HH:mm} " +
-                $"al {fechaHoraFin:dd/MM/yyyy HH:mm}.";
+                $"{nombreServicio.Trim()} por necesidades operativas de manera voluntaria " +
+                $"y eventual, sin que constituya jornada habitual. " +
+                $"Cubriendo {inicio} a {fin}.";
         }
 
         #endregion

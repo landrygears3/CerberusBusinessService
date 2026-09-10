@@ -899,8 +899,7 @@ VALUES
                 string numeroSupervisor,
                 CancellationToken ct)
         {
-            var response =
-                new ResponseModel<SolicitudRelevoNoPlaneadoDto>();
+            var response = new ResponseModel<SolicitudRelevoNoPlaneadoDto>();
 
             SqlTransaction? transaction = null;
 
@@ -910,8 +909,7 @@ VALUES
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message =
-                        "SupervisionId es inválido.";
+                    response.message = "SupervisionId es inválido.";
                     response.data = null;
 
                     return response;
@@ -921,8 +919,7 @@ VALUES
                 {
                     response.isSuccess = false;
                     response.code = 400;
-                    response.message =
-                        "El motivo del retiro del elemento es obligatorio.";
+                    response.message = "El motivo del retiro del elemento es obligatorio.";
                     response.data = null;
 
                     return response;
@@ -932,18 +929,18 @@ VALUES
                 {
                     response.isSuccess = false;
                     response.code = 401;
-                    response.message =
-                        "No fue posible identificar al supervisor.";
+                    response.message = "No fue posible identificar al supervisor.";
                     response.data = null;
 
                     return response;
                 }
 
+                numeroSupervisor = numeroSupervisor.Trim();
+
                 using var conn = _data.CrearConexion();
                 await conn.OpenAsync(ct);
 
-                transaction =
-                    conn.BeginTransaction();
+                transaction = conn.BeginTransaction();
 
                 DateTime fechaActual =
                     await _data.ObtenerFechaServidorAsync(
@@ -951,14 +948,14 @@ VALUES
                         ct,
                         transaction);
 
-                // ====================================================
+                // ============================================================
                 // SUPERVISOR
-                // ====================================================
+                // ============================================================
 
                 EmpleadoRelevoDto? supervisor =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
                         conn,
-                        numeroSupervisor.Trim(),
+                        numeroSupervisor,
                         ct,
                         transaction);
 
@@ -976,9 +973,9 @@ VALUES
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // SUPERVISION
-                // ====================================================
+                // ============================================================
 
                 const string sqlSupervision = @"
 SELECT
@@ -990,23 +987,18 @@ SELECT
     C.RutaFotoEmpleado
 FROM dbo.Supervision S
 INNER JOIN dbo.ServicioEmpleado SE
-    ON SE.ServicioEmpleadoId =
-       S.ServicioEmpleadoId
+    ON SE.ServicioEmpleadoId = S.ServicioEmpleadoId
 INNER JOIN dbo.Supervision_Comprobacion C
-    ON C.SupervisionId =
-       S.SupervisionId
-WHERE S.SupervisionId =
-      @SupervisionId;";
+    ON C.SupervisionId = S.SupervisionId
+WHERE S.SupervisionId = @SupervisionId;";
 
                 RelevoSupervisionDataDto? supervision =
-                    await conn.QueryFirstOrDefaultAsync<
-                        RelevoSupervisionDataDto>(
+                    await conn.QueryFirstOrDefaultAsync<RelevoSupervisionDataDto>(
                         new CommandDefinition(
                             sqlSupervision,
                             new
                             {
-                                SupervisionId =
-                                    supervisionId
+                                SupervisionId = supervisionId
                             },
                             transaction,
                             cancellationToken: ct));
@@ -1018,15 +1010,13 @@ WHERE S.SupervisionId =
 
                     response.isSuccess = false;
                     response.code = 404;
-                    response.message =
-                        "No existe la supervisión indicada.";
+                    response.message = "No existe la supervisión indicada.";
                     response.data = null;
 
                     return response;
                 }
 
-                if (supervision.SupervisorEmpleadoId !=
-                    supervisor.EmpleadoId)
+                if (supervision.SupervisorEmpleadoId != supervisor.EmpleadoId)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1040,8 +1030,7 @@ WHERE S.SupervisionId =
                     return response;
                 }
 
-                if (string.IsNullOrWhiteSpace(
-                    supervision.RutaFotoEmpleado))
+                if (string.IsNullOrWhiteSpace(supervision.RutaFotoEmpleado))
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1055,9 +1044,9 @@ WHERE S.SupervisionId =
                     return response;
                 }
 
-                // ====================================================
-                // ALCANCE SUPERVISOR
-                // ====================================================
+                // ============================================================
+                // ALCANCE DEL SUPERVISOR
+                // ============================================================
 
                 bool puedeSupervisar =
                     await _data.EsSupervisorServicioAsync(
@@ -1082,9 +1071,9 @@ WHERE S.SupervisionId =
                     return response;
                 }
 
-                // ====================================================
-                // ASISTENCIA ACTIVA
-                // ====================================================
+                // ============================================================
+                // ASISTENCIA ACTIVA DEL ELEMENTO
+                // ============================================================
 
                 var asistencia =
                     await _integracion
@@ -1108,8 +1097,7 @@ WHERE S.SupervisionId =
                     return response;
                 }
 
-                if (asistencia.FechaHoraSalidaProgramada <=
-                    fechaActual)
+                if (asistencia.FechaHoraSalidaProgramada <= fechaActual)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1123,39 +1111,22 @@ WHERE S.SupervisionId =
                     return response;
                 }
 
-                // ====================================================
-                // EVITAR SOLICITUD DUPLICADA
+                // ============================================================
+                // EVITAR SOLICITUD ACTIVA DUPLICADA
                 //
-                // SE CONSERVA LA CONSULTA DEL FLUJO ACTUAL.
-                // ====================================================
+                // ExisteSolicitudActivaAsync considera únicamente solicitudes:
+                // PENDIENTE_ASIGNACION / EN_PROCESO
+                // cuya FechaHoraFinCobertura todavía no haya vencido.
+                // ============================================================
 
-                const string sqlExiste = @"
-SELECT COUNT(1)
-FROM dbo.SolicitudRelevoNoPlaneado SR
-INNER JOIN dbo.CAT_RelevoNoPlaneadoEstatus ES
-    ON ES.RelevoNoPlaneadoEstatusId =
-       SR.RelevoNoPlaneadoEstatusId
-WHERE SR.ServicioEmpleadoAfectadoId =
-      @ServicioEmpleadoId
-  AND ES.Clave IN
-  (
-      'PENDIENTE_ASIGNACION',
-      'EN_PROCESO'
-  );";
+                bool existeSolicitud =
+                    await _data.ExisteSolicitudActivaAsync(
+                        conn,
+                        supervision.ServicioEmpleadoId,
+                        ct,
+                        transaction);
 
-                int existentes =
-                    await conn.ExecuteScalarAsync<int>(
-                        new CommandDefinition(
-                            sqlExiste,
-                            new
-                            {
-                                ServicioEmpleadoId =
-                                    supervision.ServicioEmpleadoId
-                            },
-                            transaction,
-                            cancellationToken: ct));
-
-                if (existentes > 0)
+                if (existeSolicitud)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1169,9 +1140,9 @@ WHERE SR.ServicioEmpleadoAfectadoId =
                     return response;
                 }
 
-                // ====================================================
+                // ============================================================
                 // CATALOGOS
-                // ====================================================
+                // ============================================================
 
                 const string sqlOrigen = @"
 SELECT TOP (1)
@@ -1193,16 +1164,15 @@ WHERE Clave = 'SUPERVISION';";
                         ct,
                         transaction);
 
-                if (!origenId.HasValue ||
-                    !estatusId.HasValue)
+                if (!origenId.HasValue || !estatusId.HasValue)
                 {
                     throw new InvalidOperationException(
                         "No están configurados los catálogos requeridos para el relevo por supervisión.");
                 }
 
-                // ====================================================
-                // SOLICITUD
-                // ====================================================
+                // ============================================================
+                // CREAR SOLICITUD
+                // ============================================================
 
                 const string sqlSolicitud = @"
 INSERT INTO dbo.SolicitudRelevoNoPlaneado
@@ -1269,22 +1239,21 @@ VALUES
                                     fechaActual,
 
                                 UsuarioRegistro =
-                                    numeroSupervisor.Trim()
+                                    numeroSupervisor
                             },
                             transaction,
                             cancellationToken: ct));
 
-                // ====================================================
-                // RETIRAR ELEMENTO
-                // ====================================================
+                // ============================================================
+                // RETIRAR ELEMENTO DEL TURNO
+                // ============================================================
 
-                await _integracion
-                    .FinalizarAsistenciaPorSupervisionAsync(
-                        conn,
-                        transaction,
-                        asistencia.AsistenciaId,
-                        fechaActual,
-                        ct);
+                await _integracion.FinalizarAsistenciaPorSupervisionAsync(
+                    conn,
+                    transaction,
+                    asistencia.AsistenciaId,
+                    fechaActual,
+                    ct);
 
                 transaction.Commit();
                 transaction = null;
@@ -1333,7 +1302,7 @@ VALUES
                             fechaActual,
 
                         UsuarioRegistro =
-                            numeroSupervisor.Trim()
+                            numeroSupervisor
                     };
 
                 return response;
