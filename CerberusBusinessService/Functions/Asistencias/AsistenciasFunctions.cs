@@ -16,9 +16,11 @@ namespace CerberusBusinessService.Functions.Asistencias
         private const int ESTATUS_PENDIENTE_AUTORIZAR = 3;
         private const int ESTATUS_CANCELADA = 4;
 
+
         private readonly string _csCerberus;
 
-        private readonly FileAsistenciaService _fileAsistenciaService;
+        private readonly FileAsistenciaService
+            _fileAsistenciaService;
 
         private readonly ServicioNotificationFunctions
             _servicioNotificationFunctions;
@@ -30,12 +32,15 @@ namespace CerberusBusinessService.Functions.Asistencias
             ServicioNotificationFunctions servicioNotificationFunctions)
         {
             _csCerberus =
-                config.GetConnectionString("DefaultConnection")
+                config.GetConnectionString(
+                    "DefaultConnection")
                 ?? throw new InvalidOperationException(
                     "No existe la cadena DefaultConnection.");
 
+
             _fileAsistenciaService =
                 fileAsistenciaService;
+
 
             _servicioNotificationFunctions =
                 servicioNotificationFunctions;
@@ -59,7 +64,12 @@ namespace CerberusBusinessService.Functions.Asistencias
 
             try
             {
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                // ====================================================
+                // 1. VALIDAR USUARIO
+                // ====================================================
+
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -71,18 +81,73 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
+                // ====================================================
+                // 2. VALIDAR REQUEST
+                // ====================================================
+
+                if (data == null)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "El request es obligatorio.";
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                // ====================================================
+                // 3. VALIDAR GEOLOCALIZACIÓN
+                // ====================================================
+
+                string? errorGeolocalizacion =
+                    ValidarGeolocalizacion(
+                        data.Latitud,
+                        data.Longitud);
+
+
+                if (errorGeolocalizacion != null)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        errorGeolocalizacion;
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                double latitud =
+                    data.Latitud!.Value;
+
+
+                double longitud =
+                    data.Longitud!.Value;
+
+
                 using var conn =
-                    new SqlConnection(_csCerberus);
+                    new SqlConnection(
+                        _csCerberus);
 
 
                 await conn.OpenAsync(ct);
 
+
+                // ====================================================
+                // 4. FECHA ACTUAL DEL SERVIDOR
+                // ====================================================
 
                 DateTime fechaHoraActual =
                     await ObtenerFechaServidorAsync(
                         conn,
                         ct);
 
+
+                // ====================================================
+                // 5. EMPLEADO DEL TOKEN
+                // ====================================================
 
                 EmpleadoAsistenciaDto? empleado =
                     await ObtenerEmpleadoAsync(
@@ -102,6 +167,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
+
+                // ====================================================
+                // 6. TURNO ASIGNADO
+                // ====================================================
 
                 var turno =
                     await ObtenerTurnoProximoAsync(
@@ -139,6 +208,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                     turno.Value.SalidaProgramada;
 
 
+                // ====================================================
+                // 7. HORARIO DEL SERVICIO
+                // ====================================================
+
                 ServicioHorarioCheckInDto? horarioServicio =
                     await ObtenerHorarioServicioAsync(
                         conn,
@@ -159,10 +232,18 @@ namespace CerberusBusinessService.Functions.Asistencias
                 }
 
 
+                // ====================================================
+                // 8. DETERMINAR FLUJO
+                // ====================================================
+
                 bool esRelevoContinuo =
                     EsServicioAtencionContinua(
                         horarioServicio);
 
+
+                // ====================================================
+                // 9. DISPATCHER
+                // ====================================================
 
                 if (esRelevoContinuo)
                 {
@@ -175,6 +256,8 @@ namespace CerberusBusinessService.Functions.Asistencias
                         salidaProgramada,
                         fechaHoraActual,
                         numeroUsuario.Trim(),
+                        latitud,
+                        longitud,
                         accessToken,
                         ct);
                 }
@@ -188,6 +271,8 @@ namespace CerberusBusinessService.Functions.Asistencias
                     salidaProgramada,
                     fechaHoraActual,
                     numeroUsuario.Trim(),
+                    latitud,
+                    longitud,
                     ct);
             }
             catch (SqlException ex)
@@ -218,7 +303,13 @@ namespace CerberusBusinessService.Functions.Asistencias
 
 
         // ============================================================
-        // CHECK-OUT
+        // CHECK-OUT DIRECTO
+        // ============================================================
+        //
+        // El flujo de Oficina permanece exactamente igual.
+        //
+        // La geolocalización que estamos agregando actualmente
+        // corresponde al CHECK-IN.
         // ============================================================
 
         public async Task<ResponseModel<CheckOutResponse>>
@@ -237,10 +328,6 @@ namespace CerberusBusinessService.Functions.Asistencias
 
             try
             {
-                // ====================================================
-                // 1. USUARIO AUTENTICADO
-                // ====================================================
-
                 if (string.IsNullOrWhiteSpace(
                     numeroUsuario))
                 {
@@ -255,23 +342,7 @@ namespace CerberusBusinessService.Functions.Asistencias
 
 
                 // ====================================================
-                // 2. DISPATCHER DE CHECK-OUT
-                // ====================================================
-                //
-                // OFICINA:
-                //
-                // NO relevo.
-                // NO autorización.
-                // NO supervisor.
-                // NO formulario.
-                // NO notificación.
-                //
-                // Cierra directamente la asistencia.
-                //
-                // LOS DEMÁS:
-                //
-                // NO pueden usar el cierre directo.
-                // Deben ir por flujo de relevo.
+                // OFICINA
                 // ====================================================
 
                 if (!esOficina)
@@ -307,12 +378,7 @@ namespace CerberusBusinessService.Functions.Asistencias
 
 
                 // ====================================================
-                // 3. BUSCAR ASISTENCIA ACTIVA
-                // ====================================================
-                //
-                // Solamente una asistencia EN TURNO puede cerrarse.
-                //
-                // ESTATUS 1 = EN TURNO
+                // BUSCAR ASISTENCIA ACTIVA
                 // ====================================================
 
                 const string sqlAsistencia = @"
@@ -357,8 +423,7 @@ ORDER BY
                 {
                     transaction.Rollback();
 
-                    transaction =
-                        null;
+                    transaction = null;
 
 
                     response.isSuccess = false;
@@ -372,7 +437,7 @@ ORDER BY
 
 
                 // ====================================================
-                // 4. CHECK-OUT DIRECTO
+                // CHECK-OUT DIRECTO
                 // ====================================================
 
                 const string sqlCheckOut = @"
@@ -410,8 +475,7 @@ WHERE AsistenciaId = @AsistenciaId
                 {
                     transaction.Rollback();
 
-                    transaction =
-                        null;
+                    transaction = null;
 
 
                     response.isSuccess = false;
@@ -424,19 +488,10 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
-                // ====================================================
-                // 5. COMMIT
-                // ====================================================
-
                 transaction.Commit();
 
-                transaction =
-                    null;
+                transaction = null;
 
-
-                // ====================================================
-                // 6. RESPONSE
-                // ====================================================
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -546,6 +601,8 @@ WHERE AsistenciaId = @AsistenciaId
                 DateTime salidaProgramada,
                 DateTime fechaHoraActual,
                 string numeroUsuario,
+                double latitud,
+                double longitud,
                 CancellationToken ct)
         {
             ResponseModel<CheckInResponse> response =
@@ -592,6 +649,14 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
+                // ====================================================
+                // INSERT ASISTENCIA
+                // ====================================================
+                //
+                // La geolocalización se guarda también para los
+                // Check-In de apertura.
+                // ====================================================
+
                 long asistenciaId =
                     await InsertarAsistenciaAsync(
                         conn,
@@ -605,10 +670,16 @@ WHERE AsistenciaId = @AsistenciaId
                         controlHora.FechaHoraCheckIn,
                         controlHora.EsRetardo,
                         controlHora.MinutosRetardo,
+                        latitud,
+                        longitud,
                         ESTATUS_EN_TURNO,
                         fechaHoraActual,
                         ct);
 
+
+                // ====================================================
+                // RETARDO
+                // ====================================================
 
                 long? incidenciaRetardoId =
                     null;
@@ -689,6 +760,8 @@ WHERE AsistenciaId = @AsistenciaId
                 DateTime salidaProgramada,
                 DateTime fechaHoraActual,
                 string numeroUsuario,
+                double latitud,
+                double longitud,
                 string accessToken,
                 CancellationToken ct)
         {
@@ -710,8 +783,13 @@ WHERE AsistenciaId = @AsistenciaId
 
             try
             {
+                // ====================================================
+                // VALIDACIONES DEL RELEVO
+                // ====================================================
+
                 string? error =
-                    ValidarRequestRelevo(data);
+                    ValidarRequestRelevo(
+                        data);
 
 
                 if (error != null)
@@ -746,6 +824,10 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
+
+                // ====================================================
+                // EMPLEADO SALIENTE
+                // ====================================================
 
                 bool salienteExiste =
                     await ExisteEmpleadoAsync(
@@ -786,11 +868,19 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
+                // ====================================================
+                // HORA / RETARDO
+                // ====================================================
+
                 var controlHora =
                     CalcularHoraCheckIn(
                         entradaProgramada,
                         fechaHoraActual);
 
+
+                // ====================================================
+                // DUPLICADO
+                // ====================================================
 
                 bool duplicadoPrevio =
                     await ExisteAsistenciaAsync(
@@ -813,6 +903,10 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
+
+                // ====================================================
+                // ARCHIVOS
+                // ====================================================
 
                 string operacionId =
                     Guid.NewGuid()
@@ -885,7 +979,15 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
-                // RESGUARDO ES OPCIONAL.
+                // ====================================================
+                // RESGUARDOS
+                //
+                // OPCIONAL:
+                //
+                // null válido
+                // [] válido
+                // ====================================================
+
                 List<ResguardoCheckInRequest> resguardos =
                     data.Resguardo
                     ?? new List<ResguardoCheckInRequest>();
@@ -935,6 +1037,10 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
+                // ====================================================
+                // TRANSACCIÓN
+                // ====================================================
+
                 transaction =
                     conn.BeginTransaction();
 
@@ -971,6 +1077,10 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
+                // ====================================================
+                // ASISTENCIA
+                // ====================================================
+
                 long asistenciaId =
                     await InsertarAsistenciaAsync(
                         conn,
@@ -984,10 +1094,16 @@ WHERE AsistenciaId = @AsistenciaId
                         controlHora.FechaHoraCheckIn,
                         controlHora.EsRetardo,
                         controlHora.MinutosRetardo,
+                        latitud,
+                        longitud,
                         ESTATUS_PENDIENTE_AUTORIZAR,
                         fechaHoraActual,
                         ct);
 
+
+                // ====================================================
+                // ETO6
+                // ====================================================
 
                 await InsertarFormatoEntradaAsync(
                     conn,
@@ -997,6 +1113,10 @@ WHERE AsistenciaId = @AsistenciaId
                     fechaHoraActual,
                     ct);
 
+
+                // ====================================================
+                // FORMULARIO
+                // ====================================================
 
                 await InsertarFormularioAsync(
                     conn,
@@ -1010,6 +1130,10 @@ WHERE AsistenciaId = @AsistenciaId
                     ct);
 
 
+                // ====================================================
+                // RESGUARDOS
+                // ====================================================
+
                 if (resguardos.Count > 0)
                 {
                     await InsertarResguardosAsync(
@@ -1022,6 +1146,10 @@ WHERE AsistenciaId = @AsistenciaId
                         ct);
                 }
 
+
+                // ====================================================
+                // RETARDO
+                // ====================================================
 
                 long? incidenciaRetardoId =
                     null;
@@ -1043,12 +1171,20 @@ WHERE AsistenciaId = @AsistenciaId
                 }
 
 
+                // ====================================================
+                // COMMIT
+                // ====================================================
+
                 transaction.Commit();
 
                 transaction = null;
 
                 commitRealizado = true;
 
+
+                // ====================================================
+                // RESPONSE
+                // ====================================================
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -1075,6 +1211,10 @@ WHERE AsistenciaId = @AsistenciaId
                         "Pendiente autorizar");
 
 
+                // ====================================================
+                // PAYLOAD NOTIFICACIÓN
+                // ====================================================
+
                 var resguardosNotificacion =
                     resguardos
                         .Select(
@@ -1082,9 +1222,13 @@ WHERE AsistenciaId = @AsistenciaId
                                 new
                                 {
                                     item.IdObjeto,
+
                                     item.Cantidad,
+
                                     item.Identificador,
+
                                     item.IdEstado,
+
                                     item.Observaciones,
 
                                     RutaFoto =
@@ -1125,6 +1269,16 @@ WHERE AsistenciaId = @AsistenciaId
 
                         FechaHoraRegistro =
                             fechaHoraActual,
+
+                        // ============================================
+                        // GEOLOCALIZACIÓN
+                        // ============================================
+
+                        Latitud =
+                            latitud,
+
+                        Longitud =
+                            longitud,
 
                         EsRetardo =
                             controlHora.EsRetardo,
@@ -1191,6 +1345,12 @@ WHERE AsistenciaId = @AsistenciaId
                     };
 
 
+                // ====================================================
+                // NOTIFICAR SUPERVISORES
+                //
+                // DESPUÉS DEL COMMIT.
+                // ====================================================
+
                 try
                 {
                     var notificationResponse =
@@ -1252,6 +1412,48 @@ WHERE AsistenciaId = @AsistenciaId
 
                 throw;
             }
+        }
+
+
+        // ============================================================
+        // VALIDAR GEOLOCALIZACIÓN
+        // ============================================================
+
+        private string? ValidarGeolocalizacion(
+            double? latitud,
+            double? longitud)
+        {
+            if (!latitud.HasValue)
+            {
+                return
+                    "La latitud es obligatoria para registrar el Check-In.";
+            }
+
+
+            if (!longitud.HasValue)
+            {
+                return
+                    "La longitud es obligatoria para registrar el Check-In.";
+            }
+
+
+            if (latitud.Value < -90 ||
+                latitud.Value > 90)
+            {
+                return
+                    "La latitud debe encontrarse entre -90 y 90.";
+            }
+
+
+            if (longitud.Value < -180 ||
+                longitud.Value > 180)
+            {
+                return
+                    "La longitud debe encontrarse entre -180 y 180.";
+            }
+
+
+            return null;
         }
 
 
@@ -1336,7 +1538,7 @@ WHERE UsuarioAsignado = @NumeroUsuario;";
 
 
         // ============================================================
-        // EMPLEADO SALIENTE EN TURNO
+        // SALIENTE EN TURNO
         // ============================================================
 
         private async Task<bool>
@@ -1378,7 +1580,7 @@ WHERE ServicioId = @ServicioId
 
 
         // ============================================================
-        // OBTENER TURNO
+        // OBTENER TURNO PRÓXIMO
         // ============================================================
 
         private async Task<(
@@ -1426,27 +1628,30 @@ ORDER BY
 
 
             IEnumerable<ServicioEmpleadoCheckInDto> result =
-                await conn
-                    .QueryAsync<ServicioEmpleadoCheckInDto>(
-                        new CommandDefinition(
-                            sql,
-                            new
-                            {
-                                EmpleadoId =
-                                    empleadoId,
+                await conn.QueryAsync<ServicioEmpleadoCheckInDto>(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            EmpleadoId =
+                                empleadoId,
 
-                                Hoy =
-                                    hoy,
+                            Hoy =
+                                hoy,
 
-                                Ayer =
-                                    ayer
-                            },
-                            cancellationToken: ct));
+                            Ayer =
+                                ayer
+                        },
+                        cancellationToken: ct));
 
 
             List<ServicioEmpleadoCheckInDto> asignaciones =
                 result.ToList();
 
+
+            // ========================================================
+            // TURNO ACTIVO
+            // ========================================================
 
             var activos =
                 new List<(
@@ -1535,6 +1740,10 @@ ORDER BY
             }
 
 
+            // ========================================================
+            // PRÓXIMO TURNO DE HOY
+            // ========================================================
+
             var proximos =
                 new List<(
                     ServicioEmpleadoCheckInDto Asignacion,
@@ -1577,7 +1786,8 @@ ORDER BY
                 }
 
 
-                if (entrada > fechaHoraActual)
+                if (entrada >
+                    fechaHoraActual)
                 {
                     proximos.Add(
                         (
@@ -1726,6 +1936,8 @@ ORDER BY
                 DateTime entradaProgramada,
                 DateTime fechaHoraActual)
         {
+            // LLEGA ANTES
+
             if (fechaHoraActual <
                 entradaProgramada)
             {
@@ -1742,6 +1954,8 @@ ORDER BY
                         MINUTOS_TOLERANCIA_RETARDO);
 
 
+            // DENTRO DE TOLERANCIA
+
             if (fechaHoraActual <=
                 limiteTolerancia)
             {
@@ -1751,6 +1965,8 @@ ORDER BY
                     null);
             }
 
+
+            // RETARDO
 
             int minutosRetardo =
                 (int)Math.Ceiling(
@@ -1768,7 +1984,7 @@ ORDER BY
 
 
         // ============================================================
-        // FECHA DENTRO DE ASIGNACIÓN
+        // FECHA ASIGNACIÓN
         // ============================================================
 
         private bool FechaDentroDeAsignacion(
@@ -1845,7 +2061,7 @@ WHERE ServicioEmpleadoId = @ServicioEmpleadoId
 
 
         // ============================================================
-        // INSERT ASISTENCIA
+        // INSERTAR ASISTENCIA
         // ============================================================
 
         private async Task<long>
@@ -1861,6 +2077,8 @@ WHERE ServicioEmpleadoId = @ServicioEmpleadoId
                 DateTime fechaHoraCheckIn,
                 bool esRetardo,
                 int? minutosRetardo,
+                double latitud,
+                double longitud,
                 int estatus,
                 DateTime fechaRegistro,
                 CancellationToken ct)
@@ -1879,6 +2097,7 @@ INSERT INTO dbo.Asistencia
     FechaHoraCheckOut,
     EsRetardo,
     MinutosRetardo,
+    Geolocalizacion,
     Estatus,
     FechaRegistro,
     UsuarioRegistro
@@ -1897,6 +2116,13 @@ VALUES
     NULL,
     @EsRetardo,
     @MinutosRetardo,
+
+    geography::Point(
+        @Latitud,
+        @Longitud,
+        4326
+    ),
+
     @Estatus,
     @FechaRegistro,
     @UsuarioRegistro
@@ -1935,6 +2161,12 @@ VALUES
 
                         MinutosRetardo =
                             minutosRetardo,
+
+                        Latitud =
+                            latitud,
+
+                        Longitud =
+                            longitud,
 
                         Estatus =
                             estatus,
@@ -2098,7 +2330,7 @@ VALUES
 
 
         // ============================================================
-        // RESGUARDOS OPCIONALES
+        // RESGUARDOS
         // ============================================================
 
         private async Task InsertarResguardosAsync(
@@ -2174,7 +2406,7 @@ VALUES
 
 
         // ============================================================
-        // RETARDO
+        // INCIDENCIA RETARDO
         // ============================================================
 
         private async Task<long>
@@ -2373,10 +2605,7 @@ VALUES
 
 
         // ============================================================
-        // VALIDAR RELEVO
-        // ============================================================
-        //
-        // RESGUARDO SIGUE SIENDO OPCIONAL.
+        // VALIDACIÓN RELEVO
         // ============================================================
 
         private string? ValidarRequestRelevo(
@@ -2448,6 +2677,17 @@ VALUES
                 return
                     "La fotografía de la zona es obligatoria.";
             }
+
+
+            // ========================================================
+            // RESGUARDO NO SE VALIDA.
+            //
+            // Puede venir:
+            //
+            // null
+            // []
+            // N elementos
+            // ========================================================
 
 
             return null;
