@@ -2720,7 +2720,33 @@ ORDER BY
                 SqlTransaction? transaction,
                 CancellationToken ct)
         {
-            const string sql = @"
+            #region SQL CONSULTA
+
+            const string sqlConsulta = @"
+SELECT TOP (1)
+    AsistenciaId,
+    ServicioId,
+    ServicioEmpleadoId,
+    NumeroEmpleadoEntrante,
+    FechaTurno,
+    FechaHoraEntradaProgramada,
+    FechaHoraSalidaProgramada,
+    FechaHoraCheckIn,
+    Estatus
+FROM dbo.Asistencia
+WHERE NumeroEmpleadoEntrante = @NumeroUsuario
+  AND Estatus = @EstatusEnTurno
+  AND FechaHoraCheckOut IS NULL
+ORDER BY
+    FechaHoraCheckIn DESC,
+    AsistenciaId DESC;";
+
+            #endregion
+
+
+            #region SQL FOR UPDATE
+
+            const string sqlForUpdate = @"
 SELECT TOP (1)
     AsistenciaId,
     ServicioId,
@@ -2739,22 +2765,34 @@ ORDER BY
     FechaHoraCheckIn DESC,
     AsistenciaId DESC;";
 
+            #endregion
+
+
+            #region EJECUCION
+
+            string sql =
+                transaction == null
+                    ? sqlConsulta
+                    : sqlForUpdate;
+
+
             return await conn.QueryFirstOrDefaultAsync<
                 AsistenciaActivaCheckOutDto>(
-                    new CommandDefinition(
-                        sql,
-                        new
-                        {
-                            NumeroUsuario =
-                                numeroUsuario,
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        NumeroUsuario =
+                            numeroUsuario.Trim(),
 
-                            EstatusEnTurno =
-                                ESTATUS_EN_TURNO
-                        },
-                        transaction,
-                        cancellationToken: ct));
+                        EstatusEnTurno =
+                            ESTATUS_EN_TURNO
+                    },
+                    transaction,
+                    cancellationToken: ct));
+
+            #endregion
         }
-
         #endregion
 
 
