@@ -3289,5 +3289,127 @@ ORDER BY
         }
 
         #endregion
+
+
+        #region MIS ASISTENCIAS
+
+        public async Task<ResponseModel<List<MiAsistenciaResponse>>>
+            ObtenerMisAsistenciasAsync(
+                string numeroUsuario,
+                CancellationToken ct)
+        {
+            ResponseModel<List<MiAsistenciaResponse>> response =
+                new ResponseModel<List<MiAsistenciaResponse>>();
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                {
+                    response.isSuccess = false;
+                    response.code = 401;
+                    response.message =
+                        "No fue posible identificar al empleado.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                using var conn =
+                    new SqlConnection(_csCerberus);
+
+                await conn.OpenAsync(ct);
+
+                const string sql = @"
+SELECT
+    A.AsistenciaId,
+    A.ServicioId,
+    A.ServicioEmpleadoId,
+    A.FechaTurno AS Fecha,
+
+    S.NombreServicio AS Servicio,
+
+    CONCAT_WS(
+        ' ',
+        NULLIF(LTRIM(RTRIM(R.Nombres)), ''),
+        NULLIF(LTRIM(RTRIM(R.ApellidoPaterno)), ''),
+        NULLIF(LTRIM(RTRIM(R.ApellidoMaterno)), '')
+    ) AS Relevo,
+
+    A.FechaHoraCheckIn AS CheckIn,
+    A.FechaHoraCheckOut AS CheckOut,
+
+    CASE
+        WHEN A.Estatus = 3 THEN 'AUTORIZANDO'
+        WHEN A.Estatus IN (1, 2) THEN 'ASISTENCIA'
+        ELSE 'ASISTENCIA'
+    END AS Estado,
+
+    CASE
+        WHEN A.Estatus = 3 THEN 'Autorizando'
+        WHEN A.Estatus IN (1, 2) THEN 'Asistencia'
+        ELSE 'Asistencia'
+    END AS EstadoDescripcion
+
+FROM dbo.Asistencia A
+
+INNER JOIN dbo.Servicio S
+    ON S.ServicioId = A.ServicioId
+
+LEFT JOIN dbo.DatosGeneralesEmpleado R
+    ON LTRIM(RTRIM(R.UsuarioAsignado)) =
+       LTRIM(RTRIM(A.NumeroEmpleadoSaliente))
+
+WHERE LTRIM(RTRIM(A.NumeroEmpleadoEntrante)) =
+      @NumeroUsuario
+
+ORDER BY
+    A.FechaTurno DESC,
+    A.AsistenciaId DESC;";
+
+                var result =
+                    await conn.QueryAsync<MiAsistenciaResponse>(
+                        new CommandDefinition(
+                            sql,
+                            new
+                            {
+                                NumeroUsuario =
+                                    numeroUsuario.Trim()
+                            },
+                            cancellationToken: ct));
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message =
+                    "Asistencias obtenidas correctamente.";
+                response.desc = null;
+                response.data = result.ToList();
+
+                return response;
+            }
+            catch (SqlException ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error SQL al obtener las asistencias.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.isSuccess = false;
+                response.code = 500;
+                response.message =
+                    "Error al obtener las asistencias.";
+                response.desc = ex.Message;
+                response.data = null;
+
+                return response;
+            }
+        }
+
+        #endregion
     }
 }

@@ -317,5 +317,64 @@ namespace CerberusBusinessService.Controllers
         }
 
         #endregion
+
+        #region MIS ASISTENCIAS
+
+        [HttpGet("MisAsistencias")]
+        [Authorize]
+        public async Task<ResponseModel<List<MiAsistenciaResponse>>>
+            MisAsistencias(CancellationToken ct)
+        {
+            if (!TryGetBearerToken(out _, out string token))
+            {
+                return CrearError<List<MiAsistenciaResponse>>(
+                    401,
+                    "No fue posible obtener un token de autorización válido.");
+            }
+
+            bool allowed = await _abac.CheckAsync(
+                ACTIVIDAD_GESTIONAR_RELEVO,
+                token,
+                ct);
+
+            if (!allowed)
+            {
+                return CrearError<List<MiAsistenciaResponse>>(
+                    403,
+                    "No se tiene acceso a esta función");
+            }
+
+            string? numeroUsuario = ObtenerNumeroUsuario();
+
+            if (string.IsNullOrWhiteSpace(numeroUsuario))
+            {
+                return CrearError<List<MiAsistenciaResponse>>(
+                    401,
+                    "No fue posible identificar al usuario autenticado.");
+            }
+
+            try
+            {
+                return await _asistenciasFunctions
+                    .ObtenerMisAsistenciasAsync(
+                        numeroUsuario,
+                        ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return CrearError<List<MiAsistenciaResponse>>(
+                    408,
+                    "La consulta de asistencias fue cancelada.");
+            }
+            catch (Exception ex)
+            {
+                return CrearError<List<MiAsistenciaResponse>>(
+                    500,
+                    "Error al obtener las asistencias.",
+                    ex.Message);
+            }
+        }
+
+        #endregion
     }
 }
