@@ -9,6 +9,7 @@ using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Functions.Relevos;
 using CerberusBusinessService.Functions.Supervision;
 using CerberusBusinessService.Functions.Servicios;
+using CerberusBusinessService.Functions.ServicioSupervisor;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
 using CerberusBusinessService.Models.Notificaciones;
@@ -129,6 +130,7 @@ builder.Services.AddScoped<AsistenciasFunctions>();
 #region SUPERVISION
 
 builder.Services.AddScoped<SupervisionFunctions>();
+builder.Services.AddScoped<ServicioSupervisorFunctions>();
 
 #endregion
 
