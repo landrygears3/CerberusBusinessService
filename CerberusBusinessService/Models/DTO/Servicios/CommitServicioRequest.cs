@@ -10,5 +10,6 @@
         public int CantidadEmpleadosRequeridos { get; set; }
         public int IdActividadServ { get; set; } = 1;
         public string? Direccion { get; set; }
+        public List<ServicioHorarioRequest> Horarios { get; set; } = new List<ServicioHorarioRequest>();
     }
 }

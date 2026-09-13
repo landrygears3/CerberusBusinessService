@@ -1,6 +1,6 @@
 ﻿namespace CerberusBusinessService.Models.DTO.Servicios
 {
-    public class ServicioResponse
+    public class ListadoServicioResponse
     {
         public int ServicioId { get; set; }
         public int ClienteId { get; set; }
@@ -14,6 +14,7 @@
         public int CantidadEmpleadosRequeridos { get; set; }
         public int IdActividadServ { get; set; }
         public string? Direccion { get; set; }
-        public List<ServicioHorarioResponse> Horarios { get; set; } = new List<ServicioHorarioResponse>();
+        public int EstatusOperativo { get; set; }
+        public string DesEstatusOp { get; set; } = string.Empty;
     }
 }

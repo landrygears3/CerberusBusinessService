@@ -20,9 +20,7 @@ namespace CerberusBusinessService.Controllers
 
         #region CONSTRUCTOR
 
-        public ServiciosController(
-            ValidaAccionFunction abac,
-            ServiciosFunctions serviciosFunctions)
+        public ServiciosController(ValidaAccionFunction abac, ServiciosFunctions serviciosFunctions)
         {
             _abac = abac;
             _serviciosFunctions = serviciosFunctions;
@@ -82,9 +80,9 @@ namespace CerberusBusinessService.Controllers
 
         [HttpPost("GetServicios")]
         [Authorize]
-        public async Task<ResponseModel<List<ServicioResponse>>> GetServicios(CancellationToken ct)
+        public async Task<ResponseModel<List<ListadoServicioResponse>>> GetServicios(CancellationToken ct)
         {
-            ResponseModel<List<ServicioResponse>> response = new ResponseModel<List<ServicioResponse>>();
+            ResponseModel<List<ListadoServicioResponse>> response = new ResponseModel<List<ListadoServicioResponse>>();
 
             string tarea = "SERVICIOS.VER";
 
