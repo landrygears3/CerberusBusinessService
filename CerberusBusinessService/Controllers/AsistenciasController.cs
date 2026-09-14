@@ -1,6 +1,5 @@
 ﻿using CerberusBusinessService.Functions;
 using CerberusBusinessService.Functions.Asistencias;
-using CerberusBusinessService.Functions.Seguridad;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Asistencias;
 using Microsoft.AspNetCore.Authorization;
@@ -24,11 +23,8 @@ namespace CerberusBusinessService.Controllers
         private readonly AsistenciasFunctions
             _asistenciasFunctions;
 
-        private readonly AsistenciaRolFunctions
-            _asistenciaRolFunctions;
-
-        private readonly UsuarioRolesFunction
-            _usuarioRolesFunction;
+        private readonly AsistenciaCheckInFunctions
+            _asistenciaCheckInFunctions;
 
         private readonly ValidaAccionFunction
             _abac;
@@ -40,8 +36,7 @@ namespace CerberusBusinessService.Controllers
         public AsistenciasController(
             ValidaAccionFunction abac,
             AsistenciasFunctions asistenciasFunctions,
-            AsistenciaRolFunctions asistenciaRolFunctions,
-            UsuarioRolesFunction usuarioRolesFunction)
+            AsistenciaCheckInFunctions asistenciaCheckInFunctions)
         {
             _abac =
                 abac;
@@ -49,11 +44,8 @@ namespace CerberusBusinessService.Controllers
             _asistenciasFunctions =
                 asistenciasFunctions;
 
-            _asistenciaRolFunctions =
-                asistenciaRolFunctions;
-
-            _usuarioRolesFunction =
-                usuarioRolesFunction;
+            _asistenciaCheckInFunctions =
+                asistenciaCheckInFunctions;
         }
 
         #endregion
@@ -70,7 +62,7 @@ namespace CerberusBusinessService.Controllers
         {
             if (!TryGetBearerToken(
                 out string authorization,
-                out string token))
+                out _))
             {
                 return CrearError<CheckInResponse>(
                     401,
@@ -90,18 +82,11 @@ namespace CerberusBusinessService.Controllers
 
             try
             {
-                List<string> roles =
-                    await _usuarioRolesFunction
-                        .ObtenerRolesAsync(
-                            token,
-                            ct);
-
-                return await _asistenciaRolFunctions
+                return await _asistenciaCheckInFunctions
                     .ProcesarCheckInAsync(
                         request,
                         numeroUsuario,
                         authorization,
-                        roles,
                         ct);
             }
             catch (OperationCanceledException)

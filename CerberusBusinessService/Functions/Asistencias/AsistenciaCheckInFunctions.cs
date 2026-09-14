@@ -6,7 +6,7 @@ using Microsoft.Data.SqlClient;
 
 namespace CerberusBusinessService.Functions.Asistencias
 {
-    public class AsistenciaRolFunctions
+    public class AsistenciaCheckInFunctions
     {
         #region CONSTANTES
 
@@ -16,20 +16,14 @@ namespace CerberusBusinessService.Functions.Asistencias
 
         private const int ESTATUS_CANCELADA = 4;
 
+        private const string ORIGEN_EMPLEADO =
+            "EMPLEADO";
+
         private const string ORIGEN_SUPERVISOR =
             "SUPERVISOR";
 
         private const string ORIGEN_OFICINA =
             "OFICINA";
-
-        private const string ROL_OFICINA =
-            "OFICINA";
-
-        private const string ROL_SUPERVISOR =
-            "SUPERVISOR";
-
-        private const string ROL_SUPERVISOR_OPERATIVO =
-            "SUPERVISOROPERATIVO";
 
         #endregion
 
@@ -44,7 +38,7 @@ namespace CerberusBusinessService.Functions.Asistencias
 
         #region CONSTRUCTOR
 
-        public AsistenciaRolFunctions(
+        public AsistenciaCheckInFunctions(
             IConfiguration config,
             AsistenciasFunctions asistenciasFunctions)
         {
@@ -67,7 +61,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                 CheckInRequest data,
                 string numeroUsuario,
                 string authorization,
-                IReadOnlyCollection<string> roles,
                 CancellationToken ct)
         {
             ResponseModel<CheckInResponse> response =
@@ -127,10 +120,16 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                 await conn.OpenAsync(ct);
 
+                #region FECHA SERVIDOR
+
                 DateTime fechaHoraActual =
                     await ObtenerFechaServidorAsync(
                         conn,
                         ct);
+
+                #endregion
+
+                #region EMPLEADO
 
                 EmpleadoAsistenciaDto? empleado =
                     await ObtenerEmpleadoAsync(
@@ -150,99 +149,158 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-                bool esSupervisor =
-                    TieneRol(
-                        roles,
-                        ROL_SUPERVISOR)
-                    ||
-                    TieneRol(
-                        roles,
-                        ROL_SUPERVISOR_OPERATIVO);
-
-                bool esOficina =
-                    TieneRol(
-                        roles,
-                        ROL_OFICINA);
-
-                List<TurnoCheckInRolDto> turnos =
-                    new List<TurnoCheckInRolDto>();
-
-                #region TURNO SUPERVISOR
-
-                if (esSupervisor)
-                {
-                    TurnoCheckInRolDto? turnoSupervisor =
-                        await ObtenerTurnoSupervisorAsync(
-                            conn,
-                            empleado.EmpleadoId,
-                            fechaHoraActual,
-                            ct);
-
-                    if (turnoSupervisor != null)
-                    {
-                        turnos.Add(
-                            turnoSupervisor);
-                    }
-                }
-
                 #endregion
 
-                #region TURNO OFICINA
+                #region OBTENER TURNOS CANDIDATOS
 
-                if (esOficina)
-                {
-                    TurnoCheckInRolDto? turnoOficina =
-                        await ObtenerTurnoOficinaAsync(
-                            conn,
-                            empleado.EmpleadoId,
-                            fechaHoraActual,
-                            ct);
+                List<TurnoCheckInDto> turnos =
+                    new List<TurnoCheckInDto>();
 
-                    if (turnoOficina != null)
-                    {
-                        turnos.Add(
-                            turnoOficina);
-                    }
-                }
-
-                #endregion
-
-                #region RESOLVER TURNO ESPECIAL
-
-                TurnoCheckInRolDto? turnoEspecial =
-                    turnos
-                        .OrderByDescending(x =>
-                            x.EsActivo)
-                        .ThenBy(x =>
-                            x.EntradaProgramada)
-                        .ThenBy(x =>
-                            x.TipoOrigen ==
-                                ORIGEN_SUPERVISOR
-                                ? 0
-                                : 1)
-                        .FirstOrDefault();
-
-                if (turnoEspecial != null)
-                {
-                    return await ProcesarCheckInSimpleAsync(
+                TurnoCheckInDto? turnoSupervisor =
+                    await ObtenerTurnoSupervisorAsync(
                         conn,
-                        data,
-                        turnoEspecial,
-                        numeroUsuario.Trim(),
+                        empleado.EmpleadoId,
                         fechaHoraActual,
                         ct);
+
+                if (turnoSupervisor != null)
+                {
+                    turnos.Add(
+                        turnoSupervisor);
+                }
+
+                TurnoCheckInDto? turnoOficina =
+                    await ObtenerTurnoOficinaAsync(
+                        conn,
+                        empleado.EmpleadoId,
+                        fechaHoraActual,
+                        ct);
+
+                if (turnoOficina != null)
+                {
+                    turnos.Add(
+                        turnoOficina);
+                }
+
+                TurnoCheckInDto? turnoEmpleado =
+                    await ObtenerTurnoEmpleadoAsync(
+                        conn,
+                        empleado.EmpleadoId,
+                        fechaHoraActual,
+                        ct);
+
+                if (turnoEmpleado != null)
+                {
+                    turnos.Add(
+                        turnoEmpleado);
                 }
 
                 #endregion
 
-                #region FALLBACK EMPLEADO / GUARDIA
+                #region SIN TURNO
 
-                return await _asistenciasFunctions
-                    .ProcesarCheckIn(
-                        data,
-                        numeroUsuario,
-                        authorization,
-                        ct);
+                if (turnos.Count == 0)
+                {
+                    response.isSuccess = false;
+                    response.code = 404;
+                    response.message =
+                        "El empleado no tiene un turno disponible para realizar Check-In.";
+                    response.desc = null;
+                    response.data = null;
+
+                    return response;
+                }
+
+                #endregion
+
+                #region SELECCIONAR TURNO
+
+                var candidatosOrdenados =
+                    turnos
+                        .Select(x => new
+                        {
+                            Turno = x,
+
+                            DistanciaSegundos =
+                                Math.Abs(
+                                    (
+                                        fechaHoraActual -
+                                        x.EntradaProgramada
+                                    ).TotalSeconds)
+                        })
+                        .OrderByDescending(x =>
+                            x.Turno.EsActivo)
+                        .ThenBy(x =>
+                            x.DistanciaSegundos)
+                        .ToList();
+
+                var primero =
+                    candidatosOrdenados[0];
+
+                if (candidatosOrdenados.Count > 1)
+                {
+                    var segundo =
+                        candidatosOrdenados[1];
+
+                    bool mismaPrioridad =
+                        primero.Turno.EsActivo ==
+                        segundo.Turno.EsActivo;
+
+                    bool mismaDistancia =
+                        Math.Abs(
+                            primero.DistanciaSegundos -
+                            segundo.DistanciaSegundos
+                        ) < 1;
+
+                    bool distintoOrigen =
+                        !string.Equals(
+                            primero.Turno.TipoOrigen,
+                            segundo.Turno.TipoOrigen,
+                            StringComparison.OrdinalIgnoreCase);
+
+                    if (mismaPrioridad &&
+                        mismaDistancia &&
+                        distintoOrigen)
+                    {
+                        response.isSuccess = false;
+                        response.code = 409;
+                        response.message =
+                            "El empleado tiene más de una asignación compatible con el horario actual.";
+                        response.desc =
+                            "No es posible determinar automáticamente qué asignación debe utilizarse para el Check-In.";
+                        response.data = null;
+
+                        return response;
+                    }
+                }
+
+                TurnoCheckInDto turnoSeleccionado =
+                    primero.Turno;
+
+                #endregion
+
+                #region DISPATCHER
+
+                if (string.Equals(
+                    turnoSeleccionado.TipoOrigen,
+                    ORIGEN_EMPLEADO,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return await _asistenciasFunctions
+                        .ProcesarCheckIn(
+                            data,
+                            numeroUsuario,
+                            authorization,
+                            ct);
+                }
+
+                return await ProcesarCheckInSimpleAsync(
+                    conn,
+                    data,
+                    turnoSeleccionado,
+                    numeroUsuario.Trim(),
+                    fechaHoraActual,
+                    ct);
 
                 #endregion
             }
@@ -280,7 +338,7 @@ namespace CerberusBusinessService.Functions.Asistencias
             ProcesarCheckInSimpleAsync(
                 SqlConnection conn,
                 CheckInRequest data,
-                TurnoCheckInRolDto turno,
+                TurnoCheckInDto turno,
                 string numeroUsuario,
                 DateTime fechaHoraActual,
                 CancellationToken ct)
@@ -300,7 +358,7 @@ namespace CerberusBusinessService.Functions.Asistencias
                 transaction =
                     conn.BeginTransaction();
 
-                #region DUPLICADO
+                #region VALIDAR DUPLICADO
 
                 const string sqlDuplicado = @"
 SELECT COUNT(1)
@@ -312,13 +370,23 @@ WHERE NumeroEmpleadoEntrante =
   AND FechaTurno =
       @FechaTurno
 
-  AND FechaHoraEntradaProgramada =
-      @FechaHoraEntradaProgramada
+  AND Estatus <>
+      @EstatusCancelada
 
-  AND FechaHoraSalidaProgramada =
-      @FechaHoraSalidaProgramada
-
-  AND Estatus <> @EstatusCancelada;";
+  AND
+  (
+      (
+          @ServicioSupervisorId IS NOT NULL
+          AND ServicioSupervisorId =
+              @ServicioSupervisorId
+      )
+      OR
+      (
+          @ServicioOficinaEmpleadoId IS NOT NULL
+          AND ServicioOficinaEmpleadoId =
+              @ServicioOficinaEmpleadoId
+      )
+  );";
 
                 int duplicado =
                     await conn.ExecuteScalarAsync<int>(
@@ -332,14 +400,12 @@ WHERE NumeroEmpleadoEntrante =
                                 FechaTurno =
                                     turno.FechaTurno.Date,
 
-                                FechaHoraEntradaProgramada =
-                                    turno.EntradaProgramada,
-
-                                FechaHoraSalidaProgramada =
-                                    turno.SalidaProgramada,
-
                                 EstatusCancelada =
-                                    ESTATUS_CANCELADA
+                                    ESTATUS_CANCELADA,
+
+                                turno.ServicioSupervisorId,
+
+                                turno.ServicioOficinaEmpleadoId
                             },
                             transaction,
                             cancellationToken: ct));
@@ -368,6 +434,8 @@ INSERT INTO dbo.Asistencia
 (
     ServicioId,
     ServicioEmpleadoId,
+    ServicioSupervisorId,
+    ServicioOficinaEmpleadoId,
     NumeroEmpleadoEntrante,
     NumeroEmpleadoSaliente,
     FechaTurno,
@@ -387,6 +455,8 @@ VALUES
 (
     @ServicioId,
     NULL,
+    @ServicioSupervisorId,
+    @ServicioOficinaEmpleadoId,
     @NumeroEmpleadoEntrante,
     NULL,
     @FechaTurno,
@@ -415,6 +485,10 @@ VALUES
                             new
                             {
                                 turno.ServicioId,
+
+                                turno.ServicioSupervisorId,
+
+                                turno.ServicioOficinaEmpleadoId,
 
                                 NumeroEmpleadoEntrante =
                                     numeroUsuario,
@@ -457,7 +531,7 @@ VALUES
 
                 #endregion
 
-                #region RETARDO
+                #region INCIDENCIA RETARDO
 
                 long? incidenciaRetardoId =
                     null;
@@ -507,6 +581,12 @@ VALUES
 
                         ServicioEmpleadoId =
                             null,
+
+                        ServicioSupervisorId =
+                            turno.ServicioSupervisorId,
+
+                        ServicioOficinaEmpleadoId =
+                            turno.ServicioOficinaEmpleadoId,
 
                         ServicioId =
                             turno.ServicioId,
@@ -563,9 +643,261 @@ VALUES
 
         #endregion
 
+        #region TURNO EMPLEADO
+
+        private async Task<TurnoCheckInDto?>
+            ObtenerTurnoEmpleadoAsync(
+                SqlConnection conn,
+                int empleadoId,
+                DateTime fechaHoraActual,
+                CancellationToken ct)
+        {
+            DateTime hoy =
+                fechaHoraActual.Date;
+
+            DateTime ayer =
+                hoy.AddDays(-1);
+
+            const string sql = @"
+SELECT
+    ServicioEmpleadoId,
+    ServicioId,
+    EmpleadoId,
+    TipoAsignacionServicioId,
+    EmpleadoCubiertoId,
+    FechaInicio,
+    FechaFin,
+    HoraEntrada,
+    HoraSalida,
+    SalidaDiaSiguiente
+FROM dbo.ServicioEmpleado
+WHERE EmpleadoId = @EmpleadoId
+  AND FechaInicio <= @Hoy
+  AND
+  (
+      FechaFin IS NULL
+      OR FechaFin >= @Ayer
+  )
+ORDER BY
+    FechaInicio DESC,
+    ServicioEmpleadoId DESC;";
+
+            IEnumerable<ServicioEmpleadoCheckInDto> result =
+                await conn.QueryAsync<
+                    ServicioEmpleadoCheckInDto>(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            EmpleadoId =
+                                empleadoId,
+
+                            Hoy =
+                                hoy,
+
+                            Ayer =
+                                ayer
+                        },
+                        cancellationToken: ct));
+
+            List<ServicioEmpleadoCheckInDto> asignaciones =
+                result.ToList();
+
+            #region TURNO ACTIVO
+
+            var activos =
+                new List<(
+                    ServicioEmpleadoCheckInDto Asignacion,
+                    DateTime FechaTurno,
+                    DateTime Entrada,
+                    DateTime Salida)>();
+
+            foreach (
+                ServicioEmpleadoCheckInDto asignacion
+                in asignaciones)
+            {
+                DateTime[] fechas =
+                {
+                    ayer,
+                    hoy
+                };
+
+                foreach (DateTime fecha
+                    in fechas)
+                {
+                    if (!FechaDentroDeAsignacion(
+                        fecha,
+                        asignacion))
+                    {
+                        continue;
+                    }
+
+                    DateTime entrada =
+                        fecha.Date.Add(
+                            asignacion.HoraEntrada);
+
+                    DateTime salida =
+                        fecha.Date.Add(
+                            asignacion.HoraSalida);
+
+                    if (asignacion.SalidaDiaSiguiente)
+                    {
+                        salida =
+                            salida.AddDays(1);
+                    }
+
+                    if (salida <= entrada)
+                    {
+                        continue;
+                    }
+
+                    if (fechaHoraActual >= entrada &&
+                        fechaHoraActual <= salida)
+                    {
+                        activos.Add(
+                            (
+                                asignacion,
+                                fecha.Date,
+                                entrada,
+                                salida
+                            ));
+                    }
+                }
+            }
+
+            if (activos.Count > 0)
+            {
+                var turnoActivo =
+                    activos
+                        .OrderByDescending(x =>
+                            x.Entrada)
+                        .First();
+
+                return new TurnoCheckInDto
+                {
+                    TipoOrigen =
+                        ORIGEN_EMPLEADO,
+
+                    ServicioId =
+                        turnoActivo
+                            .Asignacion
+                            .ServicioId,
+
+                    ServicioEmpleadoId =
+                        turnoActivo
+                            .Asignacion
+                            .ServicioEmpleadoId,
+
+                    FechaTurno =
+                        turnoActivo.FechaTurno,
+
+                    EntradaProgramada =
+                        turnoActivo.Entrada,
+
+                    SalidaProgramada =
+                        turnoActivo.Salida,
+
+                    EsActivo =
+                        true
+                };
+            }
+
+            #endregion
+
+            #region PROXIMO TURNO
+
+            var proximos =
+                new List<(
+                    ServicioEmpleadoCheckInDto Asignacion,
+                    DateTime FechaTurno,
+                    DateTime Entrada,
+                    DateTime Salida)>();
+
+            foreach (
+                ServicioEmpleadoCheckInDto asignacion
+                in asignaciones)
+            {
+                if (!FechaDentroDeAsignacion(
+                    hoy,
+                    asignacion))
+                {
+                    continue;
+                }
+
+                DateTime entrada =
+                    hoy.Add(
+                        asignacion.HoraEntrada);
+
+                DateTime salida =
+                    hoy.Add(
+                        asignacion.HoraSalida);
+
+                if (asignacion.SalidaDiaSiguiente)
+                {
+                    salida =
+                        salida.AddDays(1);
+                }
+
+                if (salida <= entrada)
+                {
+                    continue;
+                }
+
+                if (entrada > fechaHoraActual)
+                {
+                    proximos.Add(
+                        (
+                            asignacion,
+                            hoy,
+                            entrada,
+                            salida
+                        ));
+                }
+            }
+
+            if (proximos.Count == 0)
+            {
+                return null;
+            }
+
+            var proximo =
+                proximos
+                    .OrderBy(x =>
+                        x.Entrada)
+                    .First();
+
+            return new TurnoCheckInDto
+            {
+                TipoOrigen =
+                    ORIGEN_EMPLEADO,
+
+                ServicioId =
+                    proximo.Asignacion.ServicioId,
+
+                ServicioEmpleadoId =
+                    proximo.Asignacion.ServicioEmpleadoId,
+
+                FechaTurno =
+                    proximo.FechaTurno,
+
+                EntradaProgramada =
+                    proximo.Entrada,
+
+                SalidaProgramada =
+                    proximo.Salida,
+
+                EsActivo =
+                    false
+            };
+
+            #endregion
+        }
+
+        #endregion
+
         #region TURNO SUPERVISOR
 
-        private async Task<TurnoCheckInRolDto?>
+        private async Task<TurnoCheckInDto?>
             ObtenerTurnoSupervisorAsync(
                 SqlConnection conn,
                 int empleadoId,
@@ -591,21 +923,17 @@ SELECT
 FROM dbo.ServicioSupervisor
 WHERE SupervisorEmpleadoId =
       @EmpleadoId
-
   AND FechaInicio <= @Hoy
-
   AND
   (
       FechaFin IS NULL
       OR FechaFin >= @Ayer
   )
-
 ORDER BY
     FechaInicio DESC,
     ServicioSupervisorId DESC;";
 
-            IEnumerable<
-                SupervisorCheckInAsignacionDto> result =
+            IEnumerable<SupervisorCheckInAsignacionDto> result =
                 await conn.QueryAsync<
                     SupervisorCheckInAsignacionDto>(
                     new CommandDefinition(
@@ -623,12 +951,15 @@ ORDER BY
                         },
                         cancellationToken: ct));
 
-            List<TurnoCheckInRolDto> candidatos =
-                new List<TurnoCheckInRolDto>();
+            List<SupervisorCheckInAsignacionDto> asignaciones =
+                result.ToList();
+
+            var candidatos =
+                new List<TurnoCheckInDto>();
 
             foreach (
                 SupervisorCheckInAsignacionDto asignacion
-                in result)
+                in asignaciones)
             {
                 DateTime[] fechas =
                 {
@@ -686,13 +1017,17 @@ ORDER BY
                     }
 
                     candidatos.Add(
-                        new TurnoCheckInRolDto
+                        new TurnoCheckInDto
                         {
                             TipoOrigen =
                                 ORIGEN_SUPERVISOR,
 
                             ServicioId =
                                 asignacion.ServicioId,
+
+                            ServicioSupervisorId =
+                                asignacion
+                                    .ServicioSupervisorId,
 
                             FechaTurno =
                                 fecha.Date,
@@ -713,7 +1048,11 @@ ORDER BY
                 .OrderByDescending(x =>
                     x.EsActivo)
                 .ThenBy(x =>
-                    x.EntradaProgramada)
+                    Math.Abs(
+                        (
+                            fechaHoraActual -
+                            x.EntradaProgramada
+                        ).TotalSeconds))
                 .FirstOrDefault();
         }
 
@@ -721,7 +1060,7 @@ ORDER BY
 
         #region TURNO OFICINA
 
-        private async Task<TurnoCheckInRolDto?>
+        private async Task<TurnoCheckInDto?>
             ObtenerTurnoOficinaAsync(
                 SqlConnection conn,
                 int empleadoId,
@@ -735,10 +1074,12 @@ ORDER BY
                 hoy.AddDays(-1);
 
             byte diaHoy =
-                ObtenerDiaSemana(hoy);
+                ObtenerDiaSemana(
+                    hoy);
 
             byte diaAyer =
-                ObtenerDiaSemana(ayer);
+                ObtenerDiaSemana(
+                    ayer);
 
             const string sql = @"
 SELECT
@@ -798,26 +1139,17 @@ WHERE SOE.EmpleadoId =
                         },
                         cancellationToken: ct));
 
-            List<TurnoCheckInRolDto> candidatos =
-                new List<TurnoCheckInRolDto>();
+            List<TurnoCheckInDto> candidatos =
+                new List<TurnoCheckInDto>();
 
             foreach (
                 ServicioOficinaCheckInDto asignacion
                 in asignaciones)
             {
-                DateTime fechaTurno;
-
-                if (asignacion.DiaSemana ==
-                    diaHoy)
-                {
-                    fechaTurno =
-                        hoy;
-                }
-                else
-                {
-                    fechaTurno =
-                        ayer;
-                }
+                DateTime fechaTurno =
+                    asignacion.DiaSemana == diaHoy
+                        ? hoy
+                        : ayer;
 
                 DateTime entrada =
                     fechaTurno.Add(
@@ -853,13 +1185,17 @@ WHERE SOE.EmpleadoId =
                 }
 
                 candidatos.Add(
-                    new TurnoCheckInRolDto
+                    new TurnoCheckInDto
                     {
                         TipoOrigen =
                             ORIGEN_OFICINA,
 
                         ServicioId =
                             null,
+
+                        ServicioOficinaEmpleadoId =
+                            asignacion
+                                .ServicioOficinaEmpleadoId,
 
                         FechaTurno =
                             fechaTurno,
@@ -879,7 +1215,11 @@ WHERE SOE.EmpleadoId =
                 .OrderByDescending(x =>
                     x.EsActivo)
                 .ThenBy(x =>
-                    x.EntradaProgramada)
+                    Math.Abs(
+                        (
+                            fechaHoraActual -
+                            x.EntradaProgramada
+                        ).TotalSeconds))
                 .FirstOrDefault();
         }
 
@@ -1067,39 +1407,6 @@ VALUES
 
         #endregion
 
-        #region ROLES
-
-        private bool TieneRol(
-            IEnumerable<string> roles,
-            string rolBuscado)
-        {
-            string normalizadoBuscado =
-                NormalizarRol(
-                    rolBuscado);
-
-            return roles.Any(x =>
-                NormalizarRol(x) ==
-                normalizadoBuscado);
-        }
-
-        private string NormalizarRol(
-            string rol)
-        {
-            if (string.IsNullOrWhiteSpace(
-                rol))
-            {
-                return string.Empty;
-            }
-
-            return new string(
-                rol
-                    .Where(char.IsLetterOrDigit)
-                    .Select(char.ToUpperInvariant)
-                    .ToArray());
-        }
-
-        #endregion
-
         #region FECHA Y HORARIO
 
         private async Task<DateTime>
@@ -1112,6 +1419,26 @@ VALUES
                     new CommandDefinition(
                         "SELECT SYSDATETIME();",
                         cancellationToken: ct));
+        }
+
+        private bool FechaDentroDeAsignacion(
+            DateTime fecha,
+            ServicioEmpleadoCheckInDto asignacion)
+        {
+            if (fecha.Date <
+                asignacion.FechaInicio.Date)
+            {
+                return false;
+            }
+
+            if (asignacion.FechaFin.HasValue &&
+                fecha.Date >
+                asignacion.FechaFin.Value.Date)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private byte ObtenerDiaSemana(

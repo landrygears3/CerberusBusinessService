@@ -6,9 +6,14 @@
 
         public long? ServicioEmpleadoId { get; set; }
 
+        public long? ServicioSupervisorId { get; set; }
+
+        public long? ServicioOficinaEmpleadoId { get; set; }
+
         public int? ServicioId { get; set; }
 
-        public string NumeroEmpleadoEntrante { get; set; } = null!;
+        public string NumeroEmpleadoEntrante { get; set; } =
+            null!;
 
         public string? NumeroEmpleadoSaliente { get; set; }
 
@@ -28,6 +33,7 @@
 
         public int Estatus { get; set; }
 
-        public string EstatusDescripcion { get; set; } = null!;
+        public string EstatusDescripcion { get; set; } =
+            null!;
     }
 }

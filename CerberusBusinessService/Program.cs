@@ -11,7 +11,6 @@ using CerberusBusinessService.Functions.Supervision;
 using CerberusBusinessService.Functions.Servicios;
 using CerberusBusinessService.Functions.ServicioSupervisor;
 using CerberusBusinessService.Functions.Oficinas;
-using CerberusBusinessService.Functions.Seguridad;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.JWT;
 using CerberusBusinessService.Models.Notificaciones;
@@ -126,7 +125,7 @@ builder.Services.AddScoped<RelevoNotificationFunctions>();
 #region ASISTENCIAS
 
 builder.Services.AddScoped<AsistenciasFunctions>();
-builder.Services.AddScoped<AsistenciaRolFunctions>();
+builder.Services.AddScoped<AsistenciaCheckInFunctions>();
 
 #endregion
 
@@ -187,22 +186,6 @@ builder.Services.AddHttpClient<ContratacionCandidatoFunctions>((sp, http) =>
     http.BaseAddress = new Uri(opt.BaseUrl);
     http.Timeout = TimeSpan.FromSeconds(opt.TimeoutSeconds);
     http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-});
-
-builder.Services.AddHttpClient<UsuarioRolesFunction>((sp, http) =>
-{
-    var opt =
-        sp.GetRequiredService<IOptions<WsOptions>>().Value;
-
-    http.BaseAddress =
-        new Uri(opt.BaseUrl);
-
-    http.Timeout =
-        TimeSpan.FromSeconds(
-            opt.TimeoutSeconds);
-
-    http.DefaultRequestHeaders.Accept
-        .ParseAdd("application/json");
 });
 
 #endregion
