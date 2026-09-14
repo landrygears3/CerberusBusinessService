@@ -126,6 +126,7 @@ builder.Services.AddScoped<RelevoNotificationFunctions>();
 
 builder.Services.AddScoped<AsistenciasFunctions>();
 builder.Services.AddScoped<AsistenciaCheckInFunctions>();
+builder.Services.AddScoped<AsistenciaCheckOutFunctions>();
 
 #endregion
 
@@ -155,6 +156,7 @@ builder.Services.AddScoped<RelevoIntegracionAsistenciaFunctions>();
 builder.Services.AddScoped<RelevoSolicitudFunctions>();
 builder.Services.AddScoped<RelevoAsignacionFunctions>();
 builder.Services.AddScoped<RelevoConsultaFunctions>();
+builder.Services.AddScoped<RelevoFlexibleFunctions>();
 builder.Services.AddScoped<RelevoNoPlaneadoFunctions>();
 
 #endregion
