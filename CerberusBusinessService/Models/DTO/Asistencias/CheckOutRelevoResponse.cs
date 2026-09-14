@@ -1,4 +1,4 @@
-﻿namespace CerberusBusinessService.Models.DTO.Asistencias
+namespace CerberusBusinessService.Models.DTO.Asistencias
 {
     public class CheckOutRelevoResponse
     {
@@ -8,7 +8,7 @@
 
         public long ServicioEmpleadoSalienteId { get; set; }
 
-        public long ServicioEmpleadoAfectadoId { get; set; }
+        public long? ServicioEmpleadoAfectadoId { get; set; }
 
         public long SolicitudRelevoNoPlaneadoId { get; set; }
 
