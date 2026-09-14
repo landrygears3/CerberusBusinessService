@@ -78,11 +78,10 @@ namespace CerberusBusinessService.Functions.Asistencias
 
             try
             {
-                // ====================================================
-                // 1. VALIDAR USUARIO
-                // ====================================================
+                #region VALIDAR USUARIO
 
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -93,9 +92,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-                // ====================================================
-                // 2. VALIDAR REQUEST
-                // ====================================================
+                #endregion
+
+
+                #region VALIDAR REQUEST
 
                 if (data == null)
                 {
@@ -108,9 +108,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-                // ====================================================
-                // 3. VALIDAR GEOLOCALIZACION
-                // ====================================================
+                #endregion
+
+
+                #region VALIDAR GEOLOCALIZACION
 
                 string? errorGeolocalizacion =
                     ValidarGeolocalizacion(
@@ -134,23 +135,27 @@ namespace CerberusBusinessService.Functions.Asistencias
                 double longitud =
                     data.Longitud!.Value;
 
+                #endregion
+
+
                 using var conn =
-                    new SqlConnection(_csCerberus);
+                    new SqlConnection(
+                        _csCerberus);
 
                 await conn.OpenAsync(ct);
 
-                // ====================================================
-                // 4. FECHA ACTUAL DEL SERVIDOR
-                // ====================================================
+
+                #region FECHA ACTUAL
 
                 DateTime fechaHoraActual =
                     await ObtenerFechaServidorAsync(
                         conn,
                         ct);
 
-                // ====================================================
-                // 5. EMPLEADO DEL TOKEN
-                // ====================================================
+                #endregion
+
+
+                #region EMPLEADO
 
                 EmpleadoAsistenciaDto? empleado =
                     await ObtenerEmpleadoAsync(
@@ -169,9 +174,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-                // ====================================================
-                // 6. TURNO ASIGNADO
-                // ====================================================
+                #endregion
+
+
+                #region TURNO ASIGNADO
 
                 var turno =
                     await ObtenerTurnoProximoAsync(
@@ -203,9 +209,10 @@ namespace CerberusBusinessService.Functions.Asistencias
                 DateTime salidaProgramada =
                     turno.Value.SalidaProgramada;
 
-                // ====================================================
-                // 7. HORARIO DEL SERVICIO
-                // ====================================================
+                #endregion
+
+
+                #region HORARIO DEL SERVICIO
 
                 ServicioHorarioCheckInDto? horarioServicio =
                     await ObtenerHorarioServicioAsync(
@@ -225,21 +232,50 @@ namespace CerberusBusinessService.Functions.Asistencias
                     return response;
                 }
 
-                // ====================================================
-                // 8. DETERMINAR FLUJO
-                // ====================================================
+                #endregion
+
+
+                #region DETERMINAR FLUJO
 
                 bool esRelevoContinuo =
                     EsServicioAtencionContinua(
                         horarioServicio);
 
-                // ====================================================
-                // 9. DISPATCHER
-                // ====================================================
+                #endregion
+
+
+                #region DISPATCHER
 
                 if (esRelevoContinuo)
                 {
-                    return await ProcesarCheckInRelevoContinuoAsync(
+                    return await
+                        ProcesarCheckInRelevoContinuoAsync(
+                            conn,
+                            data,
+                            asignacion,
+                            fechaTurno,
+                            entradaProgramada,
+                            salidaProgramada,
+                            fechaHoraActual,
+                            numeroUsuario.Trim(),
+                            latitud,
+                            longitud,
+                            accessToken,
+                            ct);
+                }
+
+                /*
+                 * IMPORTANTE:
+                 *
+                 * Apertura no significa que debamos ignorar
+                 * información que Front sí envió.
+                 *
+                 * FormatoEntrada, Formulario y Resguardo
+                 * ahora también llegan a este flujo y,
+                 * cuando vienen informados, se persisten.
+                 */
+                return await
+                    ProcesarCheckInAperturaAsync(
                         conn,
                         data,
                         asignacion,
@@ -250,21 +286,9 @@ namespace CerberusBusinessService.Functions.Asistencias
                         numeroUsuario.Trim(),
                         latitud,
                         longitud,
-                        accessToken,
                         ct);
-                }
 
-                return await ProcesarCheckInAperturaAsync(
-                    conn,
-                    asignacion,
-                    fechaTurno,
-                    entradaProgramada,
-                    salidaProgramada,
-                    fechaHoraActual,
-                    numeroUsuario.Trim(),
-                    latitud,
-                    longitud,
-                    ct);
+                #endregion
             }
             catch (SqlException ex)
             {
@@ -550,6 +574,7 @@ WHERE AsistenciaId = @AsistenciaId
         private async Task<ResponseModel<CheckInResponse>>
             ProcesarCheckInAperturaAsync(
                 SqlConnection conn,
+                CheckInRequest data,
                 ServicioEmpleadoCheckInDto asignacion,
                 DateTime fechaTurno,
                 DateTime entradaProgramada,
@@ -563,19 +588,280 @@ WHERE AsistenciaId = @AsistenciaId
             ResponseModel<CheckInResponse> response =
                 new ResponseModel<CheckInResponse>();
 
-            var controlHora =
-                CalcularHoraCheckIn(
-                    entradaProgramada,
-                    fechaHoraActual);
+            List<string> archivosR2 =
+                new List<string>();
 
-            SqlTransaction? transaction = null;
+            SqlTransaction? transaction =
+                null;
+
+            bool commitRealizado =
+                false;
 
             try
             {
+                #region VALIDAR DATOS OPCIONALES
+
+                bool guardarFormatoEntrada =
+                    data.FormatoEntrada != null;
+
+                if (guardarFormatoEntrada &&
+                    data.FormatoEntrada!
+                        .EmpleadoEntrante == null)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "EmpleadoEntrante es obligatorio cuando se envía FormatoEntrada.";
+                    response.data = null;
+
+                    return response;
+                }
+
+
+                bool guardarFormulario =
+                    data.Formulario != null;
+
+                if (guardarFormulario)
+                {
+                    if (data.Formulario!
+                            .ImagenFirmaEntrante == null ||
+                        data.Formulario
+                            .ImagenFirmaEntrante
+                            .Length == 0)
+                    {
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message =
+                            "La firma del empleado entrante es obligatoria cuando se envía Formulario.";
+                        response.data = null;
+
+                        return response;
+                    }
+
+                    if (data.Formulario
+                            .ImagenFirmaSaliente == null ||
+                        data.Formulario
+                            .ImagenFirmaSaliente
+                            .Length == 0)
+                    {
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message =
+                            "La firma del empleado saliente es obligatoria cuando se envía Formulario.";
+                        response.data = null;
+
+                        return response;
+                    }
+
+                    if (data.Formulario.Foto == null ||
+                        data.Formulario.Foto.Length == 0)
+                    {
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message =
+                            "La fotografía de la zona es obligatoria cuando se envía Formulario.";
+                        response.data = null;
+
+                        return response;
+                    }
+                }
+
+                List<ResguardoCheckInRequest> resguardos =
+                    data.Resguardo
+                    ?? new List<ResguardoCheckInRequest>();
+
+                #endregion
+
+
+                #region HORA / RETARDO
+
+                var controlHora =
+                    CalcularHoraCheckIn(
+                        entradaProgramada,
+                        fechaHoraActual);
+
+                #endregion
+
+
+                #region DUPLICADO PREVIO
+
+                bool duplicadoPrevio =
+                    await ExisteAsistenciaAsync(
+                        conn,
+                        null,
+                        asignacion.ServicioEmpleadoId,
+                        fechaTurno,
+                        false,
+                        ct);
+
+                if (duplicadoPrevio)
+                {
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "Ya existe una asistencia para este turno.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                #endregion
+
+
+                string? rutaFirmaEntrante =
+                    null;
+
+                string? rutaFirmaSaliente =
+                    null;
+
+                string? rutaFotoZona =
+                    null;
+
+
+                #region ARCHIVOS FORMULARIO
+
+                if (guardarFormulario)
+                {
+                    string operacionId =
+                        Guid.NewGuid().ToString("N");
+
+                    ResponseModel<string> firmaEntrante =
+                        await SubirArchivoAsync(
+                            data.Formulario!
+                                .ImagenFirmaEntrante!,
+                            numeroUsuario,
+                            fechaTurno,
+                            operacionId,
+                            "firmas",
+                            archivosR2,
+                            ct);
+
+                    if (!firmaEntrante.isSuccess ||
+                        string.IsNullOrWhiteSpace(
+                            firmaEntrante.data))
+                    {
+                        await LimpiarArchivosAsync(
+                            archivosR2,
+                            ct);
+
+                        return ErrorArchivo(
+                            firmaEntrante);
+                    }
+
+                    rutaFirmaEntrante =
+                        firmaEntrante.data;
+
+
+                    ResponseModel<string> firmaSaliente =
+                        await SubirArchivoAsync(
+                            data.Formulario
+                                .ImagenFirmaSaliente!,
+                            numeroUsuario,
+                            fechaTurno,
+                            operacionId,
+                            "firmas",
+                            archivosR2,
+                            ct);
+
+                    if (!firmaSaliente.isSuccess ||
+                        string.IsNullOrWhiteSpace(
+                            firmaSaliente.data))
+                    {
+                        await LimpiarArchivosAsync(
+                            archivosR2,
+                            ct);
+
+                        return ErrorArchivo(
+                            firmaSaliente);
+                    }
+
+                    rutaFirmaSaliente =
+                        firmaSaliente.data;
+
+
+                    ResponseModel<string> fotoZona =
+                        await SubirArchivoAsync(
+                            data.Formulario.Foto!,
+                            numeroUsuario,
+                            fechaTurno,
+                            operacionId,
+                            "zona",
+                            archivosR2,
+                            ct);
+
+                    if (!fotoZona.isSuccess ||
+                        string.IsNullOrWhiteSpace(
+                            fotoZona.data))
+                    {
+                        await LimpiarArchivosAsync(
+                            archivosR2,
+                            ct);
+
+                        return ErrorArchivo(
+                            fotoZona);
+                    }
+
+                    rutaFotoZona =
+                        fotoZona.data;
+                }
+
+                #endregion
+
+
+                #region ARCHIVOS RESGUARDOS
+
+                List<string?> fotosResguardo =
+                    new List<string?>();
+
+                string operacionResguardoId =
+                    Guid.NewGuid().ToString("N");
+
+                foreach (
+                    ResguardoCheckInRequest item
+                    in resguardos)
+                {
+                    if (item.Foto != null &&
+                        item.Foto.Length > 0)
+                    {
+                        ResponseModel<string> upload =
+                            await SubirArchivoAsync(
+                                item.Foto,
+                                numeroUsuario,
+                                fechaTurno,
+                                operacionResguardoId,
+                                "resguardos",
+                                archivosR2,
+                                ct);
+
+                        if (!upload.isSuccess)
+                        {
+                            await LimpiarArchivosAsync(
+                                archivosR2,
+                                ct);
+
+                            return ErrorArchivo(
+                                upload);
+                        }
+
+                        fotosResguardo.Add(
+                            upload.data);
+                    }
+                    else
+                    {
+                        fotosResguardo.Add(
+                            null);
+                    }
+                }
+
+                #endregion
+
+
+                #region TRANSACCION
+
                 transaction =
                     conn.BeginTransaction();
 
-                bool existe =
+                bool duplicado =
                     await ExisteAsistenciaAsync(
                         conn,
                         transaction,
@@ -584,9 +870,14 @@ WHERE AsistenciaId = @AsistenciaId
                         true,
                         ct);
 
-                if (existe)
+                if (duplicado)
                 {
                     transaction.Rollback();
+                    transaction = null;
+
+                    await LimpiarArchivosAsync(
+                        archivosR2,
+                        ct);
 
                     response.isSuccess = false;
                     response.code = 409;
@@ -597,9 +888,10 @@ WHERE AsistenciaId = @AsistenciaId
                     return response;
                 }
 
-                // ====================================================
-                // INSERT ASISTENCIA
-                // ====================================================
+                #endregion
+
+
+                #region ASISTENCIA
 
                 long asistenciaId =
                     await InsertarAsistenciaAsync(
@@ -620,11 +912,65 @@ WHERE AsistenciaId = @AsistenciaId
                         fechaHoraActual,
                         ct);
 
-                // ====================================================
-                // RETARDO
-                // ====================================================
+                #endregion
 
-                long? incidenciaRetardoId = null;
+
+                #region FORMATO ENTRADA
+
+                if (guardarFormatoEntrada)
+                {
+                    await InsertarFormatoEntradaAsync(
+                        conn,
+                        transaction,
+                        asistenciaId,
+                        data,
+                        fechaHoraActual,
+                        ct);
+                }
+
+                #endregion
+
+
+                #region FORMULARIO
+
+                if (guardarFormulario)
+                {
+                    await InsertarFormularioAsync(
+                        conn,
+                        transaction,
+                        asistenciaId,
+                        data,
+                        rutaFirmaEntrante!,
+                        rutaFirmaSaliente!,
+                        rutaFotoZona!,
+                        fechaHoraActual,
+                        ct);
+                }
+
+                #endregion
+
+
+                #region RESGUARDOS
+
+                if (resguardos.Count > 0)
+                {
+                    await InsertarResguardosAsync(
+                        conn,
+                        transaction,
+                        asistenciaId,
+                        resguardos,
+                        fotosResguardo,
+                        fechaHoraActual,
+                        ct);
+                }
+
+                #endregion
+
+
+                #region RETARDO
+
+                long? incidenciaRetardoId =
+                    null;
 
                 if (controlHora.EsRetardo &&
                     controlHora.MinutosRetardo.HasValue)
@@ -637,16 +983,37 @@ WHERE AsistenciaId = @AsistenciaId
                             asignacion.ServicioId,
                             numeroUsuario,
                             fechaHoraActual,
-                            controlHora.MinutosRetardo.Value,
+                            controlHora
+                                .MinutosRetardo
+                                .Value,
                             ct);
                 }
 
-                transaction.Commit();
+                #endregion
 
-                response.isSuccess = true;
-                response.code = 200;
+
+                #region COMMIT
+
+                transaction.Commit();
+                transaction = null;
+
+                commitRealizado =
+                    true;
+
+                #endregion
+
+
+                #region RESPONSE
+
+                response.isSuccess =
+                    true;
+
+                response.code =
+                    200;
+
                 response.message =
                     "Check-In registrado correctamente.";
+
                 response.desc =
                     "El empleado quedó registrado en turno.";
 
@@ -667,15 +1034,24 @@ WHERE AsistenciaId = @AsistenciaId
                         "En turno");
 
                 return response;
+
+                #endregion
             }
             catch
             {
-                try
+                if (!commitRealizado)
                 {
-                    transaction?.Rollback();
-                }
-                catch
-                {
+                    try
+                    {
+                        transaction?.Rollback();
+                    }
+                    catch
+                    {
+                    }
+
+                    await LimpiarArchivosAsync(
+                        archivosR2,
+                        ct);
                 }
 
                 throw;
