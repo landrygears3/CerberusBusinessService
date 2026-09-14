@@ -1,9 +1,10 @@
-﻿using CerberusBusinessService.Functions.R2;
+﻿using CerberusBusinessService.Functions.Notificaciones;
+using CerberusBusinessService.Functions.R2;
 using CerberusBusinessService.Models.DTO;
+using CerberusBusinessService.Models.DTO.Asistencias;
 using CerberusBusinessService.Models.DTO.Relevos;
 using Dapper;
 using Microsoft.Data.SqlClient;
-using CerberusBusinessService.Functions.Notificaciones;
 
 namespace CerberusBusinessService.Functions.Relevos
 {
@@ -467,6 +468,8 @@ VALUES
 
             try
             {
+                #region VALIDACIONES
+
                 if (data == null)
                 {
                     response.isSuccess = false;
@@ -478,7 +481,8 @@ VALUES
                     return response;
                 }
 
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -548,6 +552,28 @@ VALUES
                     return response;
                 }
 
+                if (data.FechaHoraInicioCobertura == default)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "La fecha y hora de inicio de cobertura es obligatoria.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                if (data.FechaHoraFinCobertura == default)
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "La fecha y hora de fin de cobertura es obligatoria.";
+                    response.data = null;
+
+                    return response;
+                }
+
                 if (data.FechaHoraFinCobertura <=
                     data.FechaHoraInicioCobertura)
                 {
@@ -563,9 +589,9 @@ VALUES
                 numeroUsuario =
                     numeroUsuario.Trim();
 
-                // ============================================================
-                // EVIDENCIA
-                // ============================================================
+                #endregion
+
+                #region EVIDENCIA
 
                 string operacionId =
                     Guid.NewGuid().ToString("N");
@@ -578,7 +604,8 @@ VALUES
                         ct);
 
                 if (!upload.isSuccess ||
-                    string.IsNullOrWhiteSpace(upload.data))
+                    string.IsNullOrWhiteSpace(
+                        upload.data))
                 {
                     response.isSuccess = false;
                     response.code = upload.code;
@@ -591,6 +618,8 @@ VALUES
 
                 rutaEvidencia =
                     upload.data;
+
+                #endregion
 
                 using var conn =
                     _data.CrearConexion();
@@ -606,9 +635,7 @@ VALUES
                         ct,
                         transaction);
 
-                // ============================================================
-                // ASIGNACION SALIENTE
-                // ============================================================
+                #region ASIGNACION SALIENTE
 
                 ServicioEmpleadoRelevoDto? saliente =
                     await _data.ObtenerServicioEmpleadoAsync(
@@ -623,11 +650,11 @@ VALUES
                         "No existe la asignación del empleado saliente.");
                 }
 
-                // ============================================================
-                // ASISTENCIA ACTIVA SALIENTE
-                // ============================================================
+                #endregion
 
-                var asistencia =
+                #region ASISTENCIA ACTIVA
+
+                AsistenciaActivaCheckOutDto? asistencia =
                     await _integracion
                         .ObtenerAsistenciaActivaPorServicioEmpleadoForUpdateAsync(
                             conn,
@@ -636,14 +663,31 @@ VALUES
                             ct);
 
                 if (asistencia == null ||
-                    asistencia.AsistenciaId != asistenciaSalienteId)
+                    asistencia.AsistenciaId !=
+                    asistenciaSalienteId)
                 {
                     throw new InvalidOperationException(
                         "La asistencia activa del empleado saliente cambió antes de procesar el Check-Out.");
                 }
 
+                /*
+                 * IMPORTANTE:
+                 *
+                 * No volver a decidir si fue salida anticipada usando
+                 * fechaActual después de haber subido la evidencia.
+                 *
+                 * AsistenciasFunctions ya construyó el periodo de
+                 * cobertura al momento real en que se solicitó el
+                 * Check-Out.
+                 *
+                 * Si el inicio de cobertura es anterior a la salida
+                 * programada, se está cubriendo parte del propio turno:
+                 * es abandono.
+                 *
+                 * Si es exactamente igual, terminó el turno normalmente.
+                 */
                 bool esSalidaAnticipada =
-                    fechaActual <
+                    data.FechaHoraInicioCobertura <
                     asistencia.FechaHoraSalidaProgramada;
 
                 if (esSalidaAnticipada &&
@@ -668,13 +712,14 @@ VALUES
                     return response;
                 }
 
-                // ============================================================
-                // AFECTADO
-                //
-                // SI ES SALIDA ANTICIPADA:
-                // EL SIGUIENTE EMPLEADO TODAVIA NO HA FALTADO.
-                // ============================================================
+                #endregion
 
+                #region ASIGNACION AFECTADA
+
+                /*
+                 * Si el guardia abandona su propio turno,
+                 * todavía nadie del siguiente turno ha faltado.
+                 */
                 long? servicioEmpleadoAfectadoId =
                     esSalidaAnticipada
                         ? null
@@ -706,15 +751,15 @@ VALUES
                     }
                 }
 
-                // ============================================================
-                // EVITAR SOLICITUD DUPLICADA
-                // ============================================================
+                #endregion
+
+                #region EVITAR DUPLICADO
 
                 bool existeSolicitud =
                     await _data.ExisteSolicitudActivaAsync(
                         conn,
                         servicioEmpleadoAfectadoId,
-                        data.ServicioEmpleadoSalienteId,
+                        data.ServicioEmpleadoSalienteId.Value,
                         data.FechaHoraInicioCobertura,
                         data.FechaHoraFinCobertura,
                         ct,
@@ -740,22 +785,16 @@ VALUES
                     return response;
                 }
 
-                // ============================================================
-                // CATALOGOS
-                // ============================================================
+                #endregion
 
-                const string sqlOrigen = @"
-SELECT TOP (1)
-    RelevoNoPlaneadoOrigenId
-FROM dbo.CAT_RelevoNoPlaneadoOrigen
-WHERE Clave = 'ASISTENCIA';";
+                #region CATALOGOS
 
                 int? origenId =
-                    await conn.ExecuteScalarAsync<int?>(
-                        new CommandDefinition(
-                            sqlOrigen,
-                            transaction: transaction,
-                            cancellationToken: ct));
+                    await _data.ObtenerOrigenIdAsync(
+                        conn,
+                        "ASISTENCIA",
+                        ct,
+                        transaction);
 
                 int? estatusId =
                     await _data.ObtenerEstatusSolicitudIdAsync(
@@ -771,9 +810,9 @@ WHERE Clave = 'ASISTENCIA';";
                         "No están configurados los catálogos requeridos para el relevo por asistencia.");
                 }
 
-                // ============================================================
-                // CREAR SOLICITUD
-                // ============================================================
+                #endregion
+
+                #region INSERTAR SOLICITUD
 
                 const string sqlSolicitud = @"
 INSERT INTO dbo.SolicitudRelevoNoPlaneado
@@ -816,7 +855,7 @@ VALUES
                                     servicioEmpleadoAfectadoId,
 
                                 ServicioEmpleadoSalienteId =
-                                    data.ServicioEmpleadoSalienteId,
+                                    data.ServicioEmpleadoSalienteId.Value,
 
                                 OrigenId =
                                     origenId.Value,
@@ -824,8 +863,11 @@ VALUES
                                 EstatusId =
                                     estatusId.Value,
 
-                                data.FechaHoraInicioCobertura,
-                                data.FechaHoraFinCobertura,
+                                FechaHoraInicioCobertura =
+                                    data.FechaHoraInicioCobertura,
+
+                                FechaHoraFinCobertura =
+                                    data.FechaHoraFinCobertura,
 
                                 MotivoRelevo =
                                     data.MotivoRelevo.Trim(),
@@ -848,12 +890,15 @@ VALUES
                             transaction,
                             cancellationToken: ct));
 
-                // ============================================================
-                // INCIDENCIA FALTA
-                //
-                // SOLO EXISTE SI REALMENTE HABIA TURNO SIGUIENTE.
-                // ============================================================
+                #endregion
 
+                #region INCIDENCIA FALTA
+
+                /*
+                 * Únicamente hay FALTA_RECHAZO_TURNO
+                 * cuando realmente existía una asignación
+                 * para el siguiente turno.
+                 */
                 if (afectada != null)
                 {
                     await _integracion
@@ -867,10 +912,14 @@ VALUES
                             ct);
                 }
 
-                // ============================================================
-                // INCIDENCIA ABANDONO
-                // ============================================================
+                #endregion
 
+                #region INCIDENCIA ABANDONO
+
+                /*
+                 * El abandono pertenece al empleado saliente.
+                 * Nunca al supuesto relevo siguiente.
+                 */
                 if (esSalidaAnticipada &&
                     realizarCheckOut)
                 {
@@ -887,9 +936,9 @@ VALUES
                             ct);
                 }
 
-                // ============================================================
-                // CHECK-OUT SALIENTE
-                // ============================================================
+                #endregion
+
+                #region CHECK-OUT
 
                 if (realizarCheckOut)
                 {
@@ -904,17 +953,21 @@ VALUES
                             ct);
                 }
 
-                // ============================================================
-                // COMMIT
-                // ============================================================
+                #endregion
+
+                #region COMMIT
 
                 transaction.Commit();
                 transaction = null;
 
                 string rutaEvidenciaPersistida =
-                    rutaEvidencia;
+                    rutaEvidencia!;
 
                 rutaEvidencia = null;
+
+                #endregion
+
+                #region RESPONSE
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -924,8 +977,21 @@ VALUES
                         ? "Se creó la solicitud de relevo y se registró el Check-Out."
                         : "Se creó la solicitud de relevo correctamente.";
 
-                response.desc =
-                    "La solicitud quedó pendiente de asignación.";
+                if (esSalidaAnticipada)
+                {
+                    response.desc =
+                        "Se registró el abandono de turno. La cobertura quedó pendiente de asignación.";
+                }
+                else if (afectada != null)
+                {
+                    response.desc =
+                        "Se registró la falta del empleado del siguiente turno. La cobertura quedó pendiente de asignación.";
+                }
+                else
+                {
+                    response.desc =
+                        "La cobertura no planeada quedó pendiente de asignación.";
+                }
 
                 response.data =
                     new SolicitudRelevoNoPlaneadoDto
@@ -937,7 +1003,7 @@ VALUES
                             servicioEmpleadoAfectadoId,
 
                         ServicioEmpleadoSalienteId =
-                            data.ServicioEmpleadoSalienteId,
+                            data.ServicioEmpleadoSalienteId.Value,
 
                         RelevoNoPlaneadoOrigenId =
                             origenId.Value,
@@ -970,16 +1036,24 @@ VALUES
                             numeroUsuario
                     };
 
-                // ============================================================
-                // NOTIFICACION
-                // ============================================================
+                #endregion
 
+                #region NOTIFICACION
+
+                /*
+                 * Cuando el empleado hizo Check-Out,
+                 * la operación principal ya quedó confirmada.
+                 *
+                 * La falla de notificación no revierte
+                 * solicitud, incidencia ni Check-Out.
+                 */
                 if (realizarCheckOut)
                 {
                     try
                     {
-                        ServicioEmpleadoRelevoDto servicioContexto =
-                            afectada ?? saliente;
+                        ServicioEmpleadoRelevoDto
+                            servicioContexto =
+                                afectada ?? saliente;
 
                         var notificationResponse =
                             await _relevoNotificationFunctions
@@ -1015,6 +1089,8 @@ VALUES
                             ex.Message;
                     }
                 }
+
+                #endregion
 
                 return response;
             }

@@ -2313,7 +2313,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
             try
             {
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                #region VALIDACIONES
+
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -2358,7 +2361,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
-                numeroUsuario = numeroUsuario.Trim();
+                numeroUsuario =
+                    numeroUsuario.Trim();
+
+                #endregion
 
                 using var conn =
                     _data.CrearConexion();
@@ -2373,6 +2379,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         conn,
                         ct,
                         transaction);
+
+                #region EMPLEADO
 
                 EmpleadoRelevoDto? empleado =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
@@ -2394,6 +2402,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
                     return response;
                 }
+
+                #endregion
+
+                #region ASIGNACION
 
                 RelevoNoPlaneadoAsignacionDto? asignacion =
                     await _data.ObtenerAsignacionForUpdateAsync(
@@ -2457,6 +2469,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
+                #endregion
+
+                #region SOLICITUD
+
                 SolicitudRelevoNoPlaneadoDto? solicitud =
                     await _data.ObtenerSolicitudForUpdateAsync(
                         conn,
@@ -2504,6 +2520,35 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
+                #endregion
+
+                #region CONTEXTO SERVICIO
+
+                ServicioEmpleadoRelevoDto? servicioContexto =
+                    await ObtenerServicioContextoSolicitudAsync(
+                        conn,
+                        solicitud,
+                        ct,
+                        transaction);
+
+                if (servicioContexto == null)
+                {
+                    transaction.Rollback();
+                    transaction = null;
+
+                    response.isSuccess = false;
+                    response.code = 404;
+                    response.message =
+                        "No fue posible determinar el servicio relacionado con la solicitud.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                #endregion
+
+                #region TIPO COBERTURA
+
                 string? tipoCobertura =
                     await _data.ObtenerClaveTipoCoberturaAsync(
                         conn,
@@ -2511,16 +2556,22 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         ct,
                         transaction);
 
-                if (string.IsNullOrWhiteSpace(tipoCobertura))
+                if (string.IsNullOrWhiteSpace(
+                    tipoCobertura))
                 {
                     throw new InvalidOperationException(
                         "No fue posible determinar el tipo de cobertura.");
                 }
 
-                // ============================================================
-                // EXTENSION RECHAZADA POR EMPLEADO -> CHECKOUT
-                // ============================================================
+                #endregion
 
+                #region EXTENSION RECHAZADA
+
+                /*
+                 * Si el propio empleado rechaza una extensión
+                 * que ya estaba pendiente de su firma,
+                 * termina su asistencia activa.
+                 */
                 if (string.Equals(
                     tipoCobertura,
                     "EXTENSION",
@@ -2535,6 +2586,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                             fechaActual,
                             ct);
                 }
+
+                #endregion
+
+                #region ACTUALIZAR ASIGNACION
 
                 int? estatusRechazadaId =
                     await _data.ObtenerEstatusAsignacionIdAsync(
@@ -2597,6 +2652,10 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                         "La propuesta cambió antes de completar el rechazo.");
                 }
 
+                #endregion
+
+                #region SOLICITUD PENDIENTE ASIGNACION
+
                 int? estatusPendienteAsignacionId =
                     await _data.ObtenerEstatusSolicitudIdAsync(
                         conn,
@@ -2649,9 +2708,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         "La solicitud cambió antes de completar el rechazo.");
                 }
 
-                // ============================================================
-                // COMMIT
-                // ============================================================
+                #endregion
+
+                #region COMMIT
 
                 transaction.Commit();
                 transaction = null;
@@ -2664,6 +2723,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
                 asignacion.FechaHoraRechazo =
                     fechaActual;
+
+                #endregion
+
+                #region RESPONSE
 
                 response.isSuccess = true;
                 response.code = 200;
@@ -2681,51 +2744,37 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 response.data =
                     asignacion;
 
-                // ============================================================
-                // NOTIFICAR NUEVA NECESIDAD DE COBERTURA
-                // ============================================================
+                #endregion
+
+                #region NOTIFICACION
 
                 try
                 {
-                    ServicioEmpleadoRelevoDto? servicioAfectado =
-                        await _data.ObtenerServicioEmpleadoAsync(
-                            conn,
-                            solicitud.ServicioEmpleadoAfectadoId,
-                            ct);
+                    var notificationResponse =
+                        await _relevoNotificationFunctions
+                            .NotificarCoberturaRequeridaPorRechazoAsync(
+                                servicioContexto.ServicioId,
+                                servicioContexto.NombreServicio,
+                                solicitud.SolicitudRelevoNoPlaneadoId,
+                                asignacion.RelevoNoPlaneadoAsignacionId,
+                                tipoCobertura!,
+                                "EMPLEADO",
+                                data.MotivoRechazo.Trim(),
+                                solicitud.FechaHoraInicioCobertura,
+                                solicitud.FechaHoraFinCobertura,
+                                accessToken,
+                                ct);
 
-                    if (servicioAfectado == null)
+                    if (notificationResponse.isSuccess)
                     {
                         response.desc +=
-                            " No fue posible obtener el servicio para enviar la notificación.";
+                            " Se notificó a los supervisores que se requiere una nueva cobertura.";
                     }
                     else
                     {
-                        var notificationResponse =
-                            await _relevoNotificationFunctions
-                                .NotificarCoberturaRequeridaPorRechazoAsync(
-                                    servicioAfectado.ServicioId,
-                                    servicioAfectado.NombreServicio,
-                                    solicitud.SolicitudRelevoNoPlaneadoId,
-                                    asignacion.RelevoNoPlaneadoAsignacionId,
-                                    tipoCobertura,
-                                    "EMPLEADO",
-                                    data.MotivoRechazo.Trim(),
-                                    solicitud.FechaHoraInicioCobertura,
-                                    solicitud.FechaHoraFinCobertura,
-                                    accessToken,
-                                    ct);
-
-                        if (notificationResponse.isSuccess)
-                        {
-                            response.desc +=
-                                " Se notificó a los supervisores que se requiere una nueva cobertura.";
-                        }
-                        else
-                        {
-                            response.desc +=
-                                " No fue posible enviar la notificación de nueva cobertura. " +
-                                notificationResponse.message;
-                        }
+                        response.desc +=
+                            " No fue posible enviar la notificación de nueva cobertura. " +
+                            notificationResponse.message;
                     }
                 }
                 catch (Exception ex)
@@ -2734,6 +2783,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         " El rechazo fue registrado, pero ocurrió un error al enviar la notificación: " +
                         ex.Message;
                 }
+
+                #endregion
 
                 return response;
             }
@@ -2796,7 +2847,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
             try
             {
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                #region VALIDACIONES
+
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -2841,7 +2895,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
-                numeroUsuario = numeroUsuario.Trim();
+                numeroUsuario =
+                    numeroUsuario.Trim();
+
+                #endregion
 
                 using var conn =
                     _data.CrearConexion();
@@ -2856,6 +2913,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         conn,
                         ct,
                         transaction);
+
+                #region SUPERVISOR
 
                 EmpleadoRelevoDto? supervisor =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
@@ -2877,6 +2936,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
                     return response;
                 }
+
+                #endregion
+
+                #region ASIGNACION
 
                 RelevoNoPlaneadoAsignacionDto? asignacion =
                     await _data.ObtenerAsignacionForUpdateAsync(
@@ -2949,6 +3012,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
+                #endregion
+
+                #region SOLICITUD
+
                 SolicitudRelevoNoPlaneadoDto? solicitud =
                     await _data.ObtenerSolicitudForUpdateAsync(
                         conn,
@@ -2996,14 +3063,25 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
-                ServicioEmpleadoRelevoDto? servicioAfectado =
-                    await _data.ObtenerServicioEmpleadoAsync(
+                #endregion
+
+                #region CONTEXTO SERVICIO
+
+                /*
+                 * Con afectado:
+                 *     usa la asignación que faltó.
+                 *
+                 * Sin afectado:
+                 *     usa la asignación saliente.
+                 */
+                ServicioEmpleadoRelevoDto? servicioContexto =
+                    await ObtenerServicioContextoSolicitudAsync(
                         conn,
-                        solicitud.ServicioEmpleadoAfectadoId,
+                        solicitud,
                         ct,
                         transaction);
 
-                if (servicioAfectado == null)
+                if (servicioContexto == null)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -3011,17 +3089,21 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     response.isSuccess = false;
                     response.code = 404;
                     response.message =
-                        "No existe la asignación de servicio relacionada con la solicitud.";
+                        "No fue posible determinar el servicio relacionado con la solicitud.";
                     response.data = null;
 
                     return response;
                 }
 
+                #endregion
+
+                #region ALCANCE SUPERVISOR
+
                 bool puedeAdministrarServicio =
                     await _data.EsSupervisorServicioAsync(
                         conn,
                         supervisor.EmpleadoId,
-                        servicioAfectado.ServicioId,
+                        servicioContexto.ServicioId,
                         solicitud.FechaHoraInicioCobertura.Date,
                         ct,
                         transaction);
@@ -3040,6 +3122,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     return response;
                 }
 
+                #endregion
+
+                #region ACTUALIZAR ASIGNACION
+
                 int? estatusRechazadaId =
                     await _data.ObtenerEstatusAsignacionIdAsync(
                         conn,
@@ -3053,10 +3139,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         "No está configurado el estatus RECHAZADA_SUPERVISOR.");
                 }
 
-                // ============================================================
-                // EL SUPERVISOR NO REALIZA CHECK-OUT AQUI
-                // ============================================================
-
+                /*
+                 * El supervisor únicamente rechaza la propuesta.
+                 * No realiza el Check-Out del empleado saliente aquí.
+                 */
                 const string sqlRechazar = @"
 UPDATE dbo.RelevoNoPlaneadoAsignacion
 SET
@@ -3107,6 +3193,10 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                     throw new InvalidOperationException(
                         "La propuesta cambió antes de completar el rechazo.");
                 }
+
+                #endregion
+
+                #region SOLICITUD PENDIENTE ASIGNACION
 
                 int? estatusPendienteAsignacionId =
                     await _data.ObtenerEstatusSolicitudIdAsync(
@@ -3160,9 +3250,9 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         "La solicitud cambió antes de completar el rechazo.");
                 }
 
-                // ============================================================
-                // COMMIT
-                // ============================================================
+                #endregion
+
+                #region COMMIT
 
                 transaction.Commit();
                 transaction = null;
@@ -3176,6 +3266,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 asignacion.FechaHoraRechazo =
                     fechaActual;
 
+                #endregion
+
+                #region RESPONSE
+
                 response.isSuccess = true;
                 response.code = 200;
                 response.message =
@@ -3185,17 +3279,17 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 response.data =
                     asignacion;
 
-                // ============================================================
-                // NOTIFICAR NUEVA NECESIDAD DE COBERTURA
-                // ============================================================
+                #endregion
+
+                #region NOTIFICACION
 
                 try
                 {
                     var notificationResponse =
                         await _relevoNotificationFunctions
                             .NotificarCoberturaRequeridaPorRechazoAsync(
-                                servicioAfectado.ServicioId,
-                                servicioAfectado.NombreServicio,
+                                servicioContexto.ServicioId,
+                                servicioContexto.NombreServicio,
                                 solicitud.SolicitudRelevoNoPlaneadoId,
                                 asignacion.RelevoNoPlaneadoAsignacionId,
                                 tipoCobertura!,
@@ -3224,6 +3318,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         " El rechazo fue registrado, pero ocurrió un error al enviar la notificación: " +
                         ex.Message;
                 }
+
+                #endregion
 
                 return response;
             }
