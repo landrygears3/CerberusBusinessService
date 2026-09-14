@@ -1,4 +1,4 @@
-﻿namespace CerberusBusinessService.Models.DTO.Relevos
+namespace CerberusBusinessService.Models.DTO.Relevos
 {
     public class RelevoPendienteEmpleadoResponse
     {
@@ -10,7 +10,7 @@
 
         public string NombreServicio { get; set; } = null!;
 
-        public long ServicioEmpleadoAfectadoId { get; set; }
+        public long? ServicioEmpleadoAfectadoId { get; set; }
 
         public string TipoCoberturaClave { get; set; } = null!;
 
