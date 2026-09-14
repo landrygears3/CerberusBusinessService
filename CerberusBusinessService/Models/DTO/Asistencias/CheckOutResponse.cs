@@ -4,9 +4,9 @@
     {
         public long AsistenciaId { get; set; }
 
-        public int ServicioId { get; set; }
+        public int? ServicioId { get; set; }
 
-        public long ServicioEmpleadoId { get; set; }
+        public long? ServicioEmpleadoId { get; set; }
 
         public string NumeroEmpleado { get; set; } = null!;
 

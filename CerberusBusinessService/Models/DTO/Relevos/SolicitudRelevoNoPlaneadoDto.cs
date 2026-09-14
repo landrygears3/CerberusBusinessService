@@ -4,7 +4,7 @@
     {
         public long SolicitudRelevoNoPlaneadoId { get; set; }
 
-        public long ServicioEmpleadoAfectadoId { get; set; }
+        public long? ServicioEmpleadoAfectadoId { get; set; }
 
         public long? ServicioEmpleadoSalienteId { get; set; }
 

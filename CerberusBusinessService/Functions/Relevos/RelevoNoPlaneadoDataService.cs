@@ -62,7 +62,7 @@ SELECT SYSDATETIME();";
         public async Task<ServicioEmpleadoRelevoDto?>
             ObtenerServicioEmpleadoAsync(
                 SqlConnection conn,
-                long servicioEmpleadoId,
+                long? servicioEmpleadoId,
                 CancellationToken ct,
                 SqlTransaction? transaction = null)
         {
@@ -186,6 +186,89 @@ WHERE LTRIM(RTRIM(D.UsuarioAsignado)) =
 
 
         #region SOLICITUD
+
+        public async Task<bool>
+    ExisteSolicitudActivaAsync(
+        SqlConnection conn,
+        long? servicioEmpleadoAfectadoId,
+        long? servicioEmpleadoSalienteId,
+        DateTime fechaHoraInicioCobertura,
+        DateTime fechaHoraFinCobertura,
+        CancellationToken ct,
+        SqlTransaction? transaction = null)
+        {
+            const string sql = @"
+SELECT
+    CASE
+        WHEN EXISTS
+        (
+            SELECT 1
+            FROM dbo.SolicitudRelevoNoPlaneado SR
+
+            INNER JOIN dbo.CAT_RelevoNoPlaneadoEstatus ES
+                ON ES.RelevoNoPlaneadoEstatusId =
+                   SR.RelevoNoPlaneadoEstatusId
+
+            WHERE ES.Clave IN
+            (
+                'PENDIENTE_ASIGNACION',
+                'EN_PROCESO'
+            )
+
+            AND SR.FechaHoraFinCobertura >
+                SYSDATETIME()
+
+            AND
+            (
+                (
+                    @ServicioEmpleadoAfectadoId IS NOT NULL
+
+                    AND SR.ServicioEmpleadoAfectadoId =
+                        @ServicioEmpleadoAfectadoId
+                )
+
+                OR
+
+                (
+                    @ServicioEmpleadoAfectadoId IS NULL
+
+                    AND SR.ServicioEmpleadoAfectadoId IS NULL
+
+                    AND SR.ServicioEmpleadoSalienteId =
+                        @ServicioEmpleadoSalienteId
+
+                    AND SR.FechaHoraInicioCobertura <
+                        @FechaHoraFinCobertura
+
+                    AND SR.FechaHoraFinCobertura >
+                        @FechaHoraInicioCobertura
+                )
+            )
+        )
+        THEN CAST(1 AS BIT)
+        ELSE CAST(0 AS BIT)
+    END;";
+
+            return await conn.ExecuteScalarAsync<bool>(
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        ServicioEmpleadoAfectadoId =
+                            servicioEmpleadoAfectadoId,
+
+                        ServicioEmpleadoSalienteId =
+                            servicioEmpleadoSalienteId,
+
+                        FechaHoraInicioCobertura =
+                            fechaHoraInicioCobertura,
+
+                        FechaHoraFinCobertura =
+                            fechaHoraFinCobertura
+                    },
+                    transaction,
+                    cancellationToken: ct));
+        }
 
         public async Task<SolicitudRelevoNoPlaneadoDto?>
             ObtenerSolicitudAsync(

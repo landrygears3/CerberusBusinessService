@@ -10,7 +10,7 @@
 
         public string NombreServicio { get; set; } = null!;
 
-        public long ServicioEmpleadoAfectadoId { get; set; }
+        public long? ServicioEmpleadoAfectadoId { get; set; }
 
         public string TipoCoberturaClave { get; set; } = null!;
 

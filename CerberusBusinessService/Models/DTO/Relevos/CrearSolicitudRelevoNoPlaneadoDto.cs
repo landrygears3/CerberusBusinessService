@@ -2,7 +2,7 @@
 {
     public class CrearSolicitudRelevoNoPlaneadoDto
     {
-        public long ServicioEmpleadoAfectadoId { get; set; }
+        public long? ServicioEmpleadoAfectadoId { get; set; }
 
         public long? ServicioEmpleadoSalienteId { get; set; }
 

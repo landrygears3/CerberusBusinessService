@@ -177,7 +177,7 @@ namespace CerberusBusinessService.Controllers
 
         #endregion
 
-        #region CHECK-OUT SIN RELEVO
+        #region CHECK-OUT
 
         [HttpPost("CheckOutSinRelevo")]
         [Authorize]
@@ -191,26 +191,12 @@ namespace CerberusBusinessService.Controllers
         {
             if (!TryGetBearerToken(
                 out string authorization,
-                out string token))
+                out _))
             {
                 return CrearError<
                     CheckOutRelevoResponse>(
                     401,
                     "No fue posible obtener un token de autorización válido.");
-            }
-
-            bool allowed =
-                await _abac.CheckAsync(
-                    ACTIVIDAD_GESTIONAR_RELEVO,
-                    token,
-                    ct);
-
-            if (!allowed)
-            {
-                return CrearError<
-                    CheckOutRelevoResponse>(
-                    403,
-                    "No se tiene acceso a esta función");
             }
 
             string? numeroUsuario =
@@ -233,31 +219,13 @@ namespace CerberusBusinessService.Controllers
                     "El request es obligatorio.");
             }
 
-            if (request.ServicioEmpleadoAfectadoId <= 0)
+            if (request.ServicioEmpleadoAfectadoId.HasValue &&
+                request.ServicioEmpleadoAfectadoId.Value <= 0)
             {
                 return CrearError<
                     CheckOutRelevoResponse>(
                     400,
                     "ServicioEmpleadoAfectadoId es inválido.");
-            }
-
-            if (request.FotoEvidencia == null ||
-                request.FotoEvidencia.Length == 0)
-            {
-                return CrearError<
-                    CheckOutRelevoResponse>(
-                    400,
-                    "La fotografía de evidencia es obligatoria.");
-            }
-
-            if (!request.PuedePermanecer &&
-                string.IsNullOrWhiteSpace(
-                    request.MotivoNoPermanencia))
-            {
-                return CrearError<
-                    CheckOutRelevoResponse>(
-                    400,
-                    "El motivo por el cual el empleado no puede permanecer es obligatorio.");
             }
 
             try
@@ -274,14 +242,14 @@ namespace CerberusBusinessService.Controllers
                 return CrearError<
                     CheckOutRelevoResponse>(
                     408,
-                    "La operación de Check-Out sin relevo fue cancelada.");
+                    "La operación de Check-Out fue cancelada.");
             }
             catch (Exception ex)
             {
                 return CrearError<
                     CheckOutRelevoResponse>(
                     500,
-                    "Error al procesar el Check-Out sin relevo.",
+                    "Error al procesar el Check-Out.",
                     ex.Message);
             }
         }

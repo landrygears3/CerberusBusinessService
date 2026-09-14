@@ -176,9 +176,10 @@ WHERE AsistenciaId = @AsistenciaId
             SqlConnection conn,
             SqlTransaction transaction,
             SolicitudRelevoNoPlaneadoDto solicitud,
-            ServicioEmpleadoRelevoDto asignacionAfectada,
+            ServicioEmpleadoRelevoDto servicioContexto,
+            ServicioEmpleadoRelevoDto? asignacionAfectada,
             EmpleadoRelevoDto empleadoAsignado,
-            int tipoAsignacionFaltaId,
+            int tipoAsignacionServicioId,
             DateTime fechaActual,
             string numeroUsuario,
             CancellationToken ct)
@@ -197,8 +198,11 @@ WHERE AsistenciaId = @AsistenciaId
                 solicitud.FechaHoraInicioCobertura.Date;
 
             string observaciones =
-                $"Relevo no planeado. Solicitud: " +
-                $"{solicitud.SolicitudRelevoNoPlaneadoId}.";
+                asignacionAfectada != null
+                    ? $"Relevo no planeado por falta. Solicitud: " +
+                      $"{solicitud.SolicitudRelevoNoPlaneadoId}."
+                    : $"Cobertura no planeada sin turno siguiente asignado. Solicitud: " +
+                      $"{solicitud.SolicitudRelevoNoPlaneadoId}.";
 
             const string sql = @"
 INSERT INTO dbo.ServicioEmpleado
@@ -239,16 +243,16 @@ VALUES
                     new
                     {
                         ServicioId =
-                            asignacionAfectada.ServicioId,
+                            servicioContexto.ServicioId,
 
                         EmpleadoId =
                             empleadoAsignado.EmpleadoId,
 
                         TipoAsignacionServicioId =
-                            tipoAsignacionFaltaId,
+                            tipoAsignacionServicioId,
 
                         EmpleadoCubiertoId =
-                            asignacionAfectada.EmpleadoId,
+                            asignacionAfectada?.EmpleadoId,
 
                         FechaInicio =
                             fechaTurno,
@@ -287,7 +291,7 @@ VALUES
             SqlConnection conn,
             SqlTransaction transaction,
             SolicitudRelevoNoPlaneadoDto solicitud,
-            ServicioEmpleadoRelevoDto asignacionAfectada,
+            ServicioEmpleadoRelevoDto servicioContexto,
             long servicioEmpleadoTemporalId,
             EmpleadoRelevoDto empleado,
             DateTime fechaActual,
@@ -347,8 +351,6 @@ WHERE ServicioEmpleadoId = @ServicioEmpleadoSalienteId
 
             // ========================================================
             // CREAR ASISTENCIA DE EXTENSION
-            //
-            // CONSERVA LA GEOLOCALIZACION DEL TURNO ORIGINAL.
             // ========================================================
 
             const string sqlInsert = @"
@@ -397,7 +399,7 @@ WHERE A.AsistenciaId = @AsistenciaOriginalId;";
                         new
                         {
                             ServicioId =
-                                asignacionAfectada.ServicioId,
+                                servicioContexto.ServicioId,
 
                             ServicioEmpleadoId =
                                 servicioEmpleadoTemporalId,
@@ -677,6 +679,144 @@ VALUES
 
                         FechaRegistro =
                             fechaRegistro
+                    },
+                    transaction,
+                    cancellationToken: ct));
+        }
+
+        #endregion
+
+
+        #region INCIDENCIA ABANDONO DE TURNO
+
+        public async Task<long?> RegistrarIncidenciaAbandonoTurnoAsync(
+            SqlConnection conn,
+            SqlTransaction transaction,
+            long asistenciaId,
+            ServicioEmpleadoRelevoDto asignacionSaliente,
+            string numeroEmpleado,
+            string motivoAbandono,
+            DateTime fechaIncidencia,
+            string usuarioRegistro,
+            CancellationToken ct)
+        {
+            const string sqlTipo = @"
+SELECT TOP (1)
+    TipoIncidenciaId,
+    AfectaNomina,
+    TipoAfectacionNomina,
+    MontoAfectacion
+FROM dbo.CAT_TIPO_INCIDENCIA
+WHERE Clave = 'ABANDONO_TURNO'
+  AND Estatus = 1;";
+
+            TipoIncidenciaDto? tipoAbandono =
+                await conn.QueryFirstOrDefaultAsync<TipoIncidenciaDto>(
+                    new CommandDefinition(
+                        sqlTipo,
+                        transaction: transaction,
+                        cancellationToken: ct));
+
+            if (tipoAbandono == null)
+            {
+                throw new InvalidOperationException(
+                    "No está configurado el tipo de incidencia ABANDONO_TURNO.");
+            }
+
+            const string sqlExiste = @"
+SELECT TOP (1)
+    IncidenciaId
+FROM dbo.Incidencias WITH (UPDLOCK, HOLDLOCK)
+WHERE TipoIncidenciaId = @TipoIncidenciaId
+  AND AsistenciaId = @AsistenciaId
+  AND Estatus = 1;";
+
+            long? incidenciaExistente =
+                await conn.ExecuteScalarAsync<long?>(
+                    new CommandDefinition(
+                        sqlExiste,
+                        new
+                        {
+                            tipoAbandono.TipoIncidenciaId,
+                            AsistenciaId = asistenciaId
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+            if (incidenciaExistente.HasValue)
+            {
+                return incidenciaExistente.Value;
+            }
+
+            const string sqlInsert = @"
+INSERT INTO dbo.Incidencias
+(
+    TipoIncidenciaId,
+    NumeroUsuario,
+    ServicioId,
+    AsignacionTurnoId,
+    AsistenciaId,
+    FechaIncidencia,
+    Descripcion,
+    AfectaNomina,
+    TipoAfectacionNomina,
+    MontoAfectacion,
+    Estatus,
+    UsuarioRegistro,
+    FechaRegistro
+)
+OUTPUT INSERTED.IncidenciaId
+VALUES
+(
+    @TipoIncidenciaId,
+    @NumeroUsuario,
+    @ServicioId,
+    @AsignacionTurnoId,
+    @AsistenciaId,
+    @FechaIncidencia,
+    @Descripcion,
+    @AfectaNomina,
+    @TipoAfectacionNomina,
+    @MontoAfectacion,
+    1,
+    @UsuarioRegistro,
+    @FechaRegistro
+);";
+
+            return await conn.ExecuteScalarAsync<long>(
+                new CommandDefinition(
+                    sqlInsert,
+                    new
+                    {
+                        tipoAbandono.TipoIncidenciaId,
+
+                        NumeroUsuario =
+                            numeroEmpleado.Trim(),
+
+                        ServicioId =
+                            asignacionSaliente.ServicioId,
+
+                        AsignacionTurnoId =
+                            asignacionSaliente.ServicioEmpleadoId,
+
+                        AsistenciaId =
+                            asistenciaId,
+
+                        FechaIncidencia =
+                            fechaIncidencia,
+
+                        Descripcion =
+                            $"Abandono de turno antes de la hora programada. Motivo: {motivoAbandono.Trim()}",
+
+                        tipoAbandono.AfectaNomina,
+                        tipoAbandono.TipoAfectacionNomina,
+                        tipoAbandono.MontoAfectacion,
+
+                        UsuarioRegistro =
+                            usuarioRegistro.Trim(),
+
+                        FechaRegistro =
+                            fechaIncidencia
                     },
                     transaction,
                     cancellationToken: ct));

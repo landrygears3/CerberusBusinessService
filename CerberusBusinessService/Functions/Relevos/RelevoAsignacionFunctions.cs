@@ -26,6 +26,9 @@ namespace CerberusBusinessService.Functions.Relevos
         private const string TIPO_ASIGNACION_FALTA =
             "FALTA";
 
+        private const string TIPO_ASIGNACION_COBERTURA_NO_PLANEADA =
+            "COBERTURA_NO_PLANEADA";
+
         private const string ESTATUS_EN_PROCESO =
             "EN_PROCESO";
 
@@ -211,17 +214,23 @@ namespace CerberusBusinessService.Functions.Relevos
                 }
 
                 // ============================================================
-                // ASIGNACION AFECTADA
+                // CONTEXTO DEL SERVICIO
+                //
+                // SI EXISTE AFECTADO:
+                //     CONTEXTO = ASIGNACION AFECTADA
+                //
+                // SI NO EXISTE AFECTADO:
+                //     CONTEXTO = ASIGNACION SALIENTE
                 // ============================================================
 
-                ServicioEmpleadoRelevoDto? asignacionAfectada =
-                    await _data.ObtenerServicioEmpleadoAsync(
+                ServicioEmpleadoRelevoDto? servicioContexto =
+                    await ObtenerServicioContextoSolicitudAsync(
                         conn,
-                        solicitud.ServicioEmpleadoAfectadoId,
+                        solicitud,
                         ct,
                         transaction);
 
-                if (asignacionAfectada == null)
+                if (servicioContexto == null)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -229,11 +238,16 @@ namespace CerberusBusinessService.Functions.Relevos
                     response.isSuccess = false;
                     response.code = 404;
                     response.message =
-                        "No existe la asignación de servicio afectada.";
+                        "No fue posible determinar el servicio relacionado con la solicitud.";
                     response.data = null;
 
                     return response;
                 }
+
+                ServicioEmpleadoRelevoDto? asignacionAfectada =
+                    solicitud.ServicioEmpleadoAfectadoId.HasValue
+                        ? servicioContexto
+                        : null;
 
                 // ============================================================
                 // EMPLEADO PROPUESTO
@@ -285,6 +299,7 @@ namespace CerberusBusinessService.Functions.Relevos
                         transaction,
                         solicitud,
                         asignacionAfectada,
+                        servicioContexto,
                         empleadoAsignado,
                         tipoCoberturaClave,
                         numeroUsuario.Trim(),
@@ -386,7 +401,7 @@ namespace CerberusBusinessService.Functions.Relevos
                 string textoResponsiva =
                     GenerarTextoResponsiva(
                         empleadoAsignado.NombreCompleto,
-                        asignacionAfectada.NombreServicio,
+                        servicioContexto.NombreServicio,
                         solicitud.FechaHoraInicioCobertura,
                         solicitud.FechaHoraFinCobertura);
 
@@ -567,8 +582,6 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
 
                 // ============================================================
                 // NOTIFICACION
-                //
-                // SI FALLA, LA ASIGNACION YA ESTA COMMITTEADA.
                 // ============================================================
 
                 try
@@ -578,8 +591,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                         var notificationResponse =
                             await _relevoNotificationFunctions
                                 .NotificarExtensionPendienteAutorizacionAsync(
-                                    asignacionAfectada.ServicioId,
-                                    asignacionAfectada.NombreServicio,
+                                    servicioContexto.ServicioId,
+                                    servicioContexto.NombreServicio,
                                     solicitud.SolicitudRelevoNoPlaneadoId,
                                     asignacionId,
                                     empleadoAsignado.EmpleadoId,
@@ -609,8 +622,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                             await _relevoNotificationFunctions
                                 .NotificarAsignacionPendienteFirmaEmpleadoAsync(
                                     empleadoAsignado.NumeroUsuario,
-                                    asignacionAfectada.ServicioId,
-                                    asignacionAfectada.NombreServicio,
+                                    servicioContexto.ServicioId,
+                                    servicioContexto.NombreServicio,
                                     solicitud.SolicitudRelevoNoPlaneadoId,
                                     asignacionId,
                                     tipoCoberturaClave,
@@ -1151,18 +1164,18 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     return response;
                 }
 
-                ServicioEmpleadoRelevoDto? servicioAfectado =
-                    await _data.ObtenerServicioEmpleadoAsync(
+                ServicioEmpleadoRelevoDto? servicioContexto =
+                    await ObtenerServicioContextoSolicitudAsync(
                         conn,
-                        solicitud.ServicioEmpleadoAfectadoId,
+                        solicitud,
                         ct);
 
-                if (servicioAfectado == null)
+                if (servicioContexto == null)
                 {
                     response.isSuccess = false;
                     response.code = 404;
                     response.message =
-                        "No existe la asignación de servicio relacionada con el relevo.";
+                        "No fue posible determinar el servicio relacionado con el relevo.";
                     response.data = null;
 
                     return response;
@@ -1172,7 +1185,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     await _data.EsSupervisorServicioAsync(
                         conn,
                         supervisor.EmpleadoId,
-                        servicioAfectado.ServicioId,
+                        servicioContexto.ServicioId,
                         solicitud.FechaHoraInicioCobertura.Date,
                         ct);
 
@@ -1324,14 +1337,14 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     return response;
                 }
 
-                servicioAfectado =
-                    await _data.ObtenerServicioEmpleadoAsync(
+                servicioContexto =
+                    await ObtenerServicioContextoSolicitudAsync(
                         conn,
-                        solicitud.ServicioEmpleadoAfectadoId,
+                        solicitud,
                         ct,
                         transaction);
 
-                if (servicioAfectado == null)
+                if (servicioContexto == null)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1345,7 +1358,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     response.isSuccess = false;
                     response.code = 404;
                     response.message =
-                        "La asignación de servicio relacionada ya no existe.";
+                        "No fue posible determinar el servicio relacionado con el relevo.";
                     response.data = null;
 
                     return response;
@@ -1355,7 +1368,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudRelevoNoPlaneadoId
                     await _data.EsSupervisorServicioAsync(
                         conn,
                         supervisor.EmpleadoId,
-                        servicioAfectado.ServicioId,
+                        servicioContexto.ServicioId,
                         solicitud.FechaHoraInicioCobertura.Date,
                         ct,
                         transaction);
@@ -1479,8 +1492,6 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
 
                 // ============================================================
                 // NOTIFICAR EMPLEADO
-                //
-                // LA AUTORIZACION YA FUE COMMITTEADA.
                 // ============================================================
 
                 try
@@ -1504,8 +1515,8 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                             await _relevoNotificationFunctions
                                 .NotificarExtensionPendienteFirmaEmpleadoAsync(
                                     empleadoAsignado.NumeroUsuario,
-                                    servicioAfectado.ServicioId,
-                                    servicioAfectado.NombreServicio,
+                                    servicioContexto.ServicioId,
+                                    servicioContexto.NombreServicio,
                                     solicitud.SolicitudRelevoNoPlaneadoId,
                                     asignacion.RelevoNoPlaneadoAsignacionId,
                                     solicitud.FechaHoraInicioCobertura,
@@ -1928,30 +1939,52 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                         "La solicitud cambió de estado antes de completar la firma.");
                 }
 
-                ServicioEmpleadoRelevoDto? asignacionAfectada =
-                    await _data.ObtenerServicioEmpleadoAsync(
+                // ============================================================
+                // CONTEXTO DEL SERVICIO
+                // ============================================================
+
+                ServicioEmpleadoRelevoDto? servicioContexto =
+                    await ObtenerServicioContextoSolicitudAsync(
                         conn,
-                        solicitud.ServicioEmpleadoAfectadoId,
+                        solicitud,
                         ct,
                         transaction);
 
-                if (asignacionAfectada == null)
+                if (servicioContexto == null)
                 {
                     throw new InvalidOperationException(
-                        "No existe la asignación de servicio que requiere cobertura.");
+                        "No fue posible determinar el servicio relacionado con la solicitud.");
                 }
 
-                int? tipoAsignacionFaltaId =
+                // ============================================================
+                // ASIGNACION AFECTADA
+                // ============================================================
+
+                ServicioEmpleadoRelevoDto? asignacionAfectada =
+                    solicitud.ServicioEmpleadoAfectadoId.HasValue
+                        ? servicioContexto
+                        : null;
+
+                // ============================================================
+                // TIPO DE ASIGNACION TEMPORAL
+                // ============================================================
+
+                string tipoAsignacionServicioClave =
+                    asignacionAfectada != null
+                        ? TIPO_ASIGNACION_FALTA
+                        : TIPO_ASIGNACION_COBERTURA_NO_PLANEADA;
+
+                int? tipoAsignacionServicioId =
                     await _data.ObtenerTipoAsignacionServicioIdAsync(
                         conn,
-                        TIPO_ASIGNACION_FALTA,
+                        tipoAsignacionServicioClave,
                         ct,
                         transaction);
 
-                if (!tipoAsignacionFaltaId.HasValue)
+                if (!tipoAsignacionServicioId.HasValue)
                 {
                     throw new InvalidOperationException(
-                        "No está configurado el tipo de asignación FALTA.");
+                        $"No está configurado el tipo de asignación {tipoAsignacionServicioClave}.");
                 }
 
                 // ============================================================
@@ -1964,9 +1997,10 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                             conn,
                             transaction,
                             solicitud,
+                            servicioContexto,
                             asignacionAfectada,
                             empleado,
-                            tipoAsignacionFaltaId.Value,
+                            tipoAsignacionServicioId.Value,
                             fechaActual,
                             numeroUsuario,
                             ct);
@@ -1985,7 +2019,7 @@ WHERE RelevoNoPlaneadoAsignacionId = @AsignacionId
                             conn,
                             transaction,
                             solicitud,
-                            asignacionAfectada,
+                            servicioContexto,
                             servicioEmpleadoTemporalId,
                             empleado,
                             fechaActual,
@@ -2170,8 +2204,6 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
 
                 // ============================================================
                 // NOTIFICAR COBERTURA ACEPTADA
-                //
-                // TODO LO OPERATIVO YA ESTA COMMITTEADO.
                 // ============================================================
 
                 try
@@ -2179,8 +2211,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     var notificationResponse =
                         await _relevoNotificationFunctions
                             .NotificarCoberturaAceptadaAsync(
-                                asignacionAfectada.ServicioId,
-                                asignacionAfectada.NombreServicio,
+                                servicioContexto.ServicioId,
+                                servicioContexto.NombreServicio,
                                 solicitud.SolicitudRelevoNoPlaneadoId,
                                 asignacion.RelevoNoPlaneadoAsignacionId,
                                 servicioEmpleadoTemporalId,
@@ -3292,7 +3324,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 SqlConnection conn,
                 SqlTransaction transaction,
                 SolicitudRelevoNoPlaneadoDto solicitud,
-                ServicioEmpleadoRelevoDto asignacionAfectada,
+                ServicioEmpleadoRelevoDto? asignacionAfectada,
+                ServicioEmpleadoRelevoDto servicioContexto,
                 EmpleadoRelevoDto empleadoAsignado,
                 string tipoCoberturaClave,
                 string numeroUsuario,
@@ -3319,6 +3352,13 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                         "No existe la asignación saliente relacionada con la extensión.";
                 }
 
+                if (asignacionSaliente.ServicioId !=
+                    servicioContexto.ServicioId)
+                {
+                    return
+                        "La asignación saliente no corresponde al servicio de la solicitud.";
+                }
+
                 if (asignacionSaliente.EmpleadoId !=
                     empleadoAsignado.EmpleadoId)
                 {
@@ -3329,7 +3369,12 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                 return null;
             }
 
-            if (empleadoAsignado.EmpleadoId ==
+            /*
+             * SOLO EXISTE ESTA REGLA CUANDO HAY
+             * UN EMPLEADO REALMENTE AFECTADO.
+             */
+            if (asignacionAfectada != null &&
+                empleadoAsignado.EmpleadoId ==
                 asignacionAfectada.EmpleadoId)
             {
                 return
@@ -3379,7 +3424,7 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     await _data.EsSupervisorServicioAsync(
                         conn,
                         supervisorActual.EmpleadoId,
-                        asignacionAfectada.ServicioId,
+                        servicioContexto.ServicioId,
                         solicitud.FechaHoraInicioCobertura.Date,
                         ct,
                         transaction);
@@ -3392,6 +3437,34 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
             }
 
             return null;
+        }
+
+        #endregion
+
+
+        #region CONTEXTO SERVICIO SOLICITUD
+
+        private async Task<ServicioEmpleadoRelevoDto?>
+            ObtenerServicioContextoSolicitudAsync(
+                SqlConnection conn,
+                SolicitudRelevoNoPlaneadoDto solicitud,
+                CancellationToken ct,
+                SqlTransaction? transaction = null)
+        {
+            long? servicioEmpleadoContextoId =
+                solicitud.ServicioEmpleadoAfectadoId
+                ?? solicitud.ServicioEmpleadoSalienteId;
+
+            if (!servicioEmpleadoContextoId.HasValue)
+            {
+                return null;
+            }
+
+            return await _data.ObtenerServicioEmpleadoAsync(
+                conn,
+                servicioEmpleadoContextoId.Value,
+                ct,
+                transaction);
         }
 
         #endregion

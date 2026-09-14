@@ -52,7 +52,7 @@ namespace CerberusBusinessService.Functions.Notificaciones
                 int servicioId,
                 string nombreServicio,
                 long solicitudId,
-                long servicioEmpleadoAfectadoId,
+                long? servicioEmpleadoAfectadoId,
                 DateTime fechaHoraInicioCobertura,
                 DateTime fechaHoraFinCobertura,
                 string motivoRelevo,

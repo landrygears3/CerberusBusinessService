@@ -85,7 +85,8 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                string? error = ValidarSolicitud(data);
+                string? error =
+                    ValidarSolicitud(data);
 
                 if (error != null)
                 {
@@ -97,12 +98,18 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
+                // ValidarSolicitud garantiza que existe y es > 0.
+                long servicioEmpleadoAfectadoId =
+                    data.ServicioEmpleadoAfectadoId!.Value;
+
                 string origenClave =
                     data.OrigenClave
                         .Trim()
                         .ToUpperInvariant();
 
-                using var conn = _data.CrearConexion();
+                using var conn =
+                    _data.CrearConexion();
+
                 await conn.OpenAsync(ct);
 
                 // ====================================================
@@ -112,7 +119,7 @@ namespace CerberusBusinessService.Functions.Relevos
                 ServicioEmpleadoRelevoDto? servicioEmpleadoAfectado =
                     await _data.ObtenerServicioEmpleadoAsync(
                         conn,
-                        data.ServicioEmpleadoAfectadoId,
+                        servicioEmpleadoAfectadoId,
                         ct);
 
                 if (servicioEmpleadoAfectado == null)
@@ -207,7 +214,7 @@ namespace CerberusBusinessService.Functions.Relevos
                 bool existeSolicitud =
                     await _data.ExisteSolicitudActivaAsync(
                         conn,
-                        data.ServicioEmpleadoAfectadoId,
+                        servicioEmpleadoAfectadoId,
                         ct);
 
                 if (existeSolicitud)
@@ -247,7 +254,8 @@ namespace CerberusBusinessService.Functions.Relevos
                     return response;
                 }
 
-                rutaFotoEvidencia = uploadResponse.data;
+                rutaFotoEvidencia =
+                    uploadResponse.data;
 
                 // ====================================================
                 // INSERT
@@ -301,7 +309,9 @@ VALUES
                                 sqlInsert,
                                 new
                                 {
-                                    data.ServicioEmpleadoAfectadoId,
+                                    ServicioEmpleadoAfectadoId =
+                                        servicioEmpleadoAfectadoId,
+
                                     data.ServicioEmpleadoSalienteId,
 
                                     RelevoNoPlaneadoOrigenId =
@@ -350,7 +360,7 @@ VALUES
                                 solicitudId,
 
                             ServicioEmpleadoAfectadoId =
-                                data.ServicioEmpleadoAfectadoId,
+                                servicioEmpleadoAfectadoId,
 
                             ServicioEmpleadoSalienteId =
                                 data.ServicioEmpleadoSalienteId,
@@ -479,7 +489,8 @@ VALUES
                     return response;
                 }
 
-                if (data.ServicioEmpleadoAfectadoId <= 0)
+                if (data.ServicioEmpleadoAfectadoId.HasValue &&
+                    data.ServicioEmpleadoAfectadoId.Value <= 0)
                 {
                     response.isSuccess = false;
                     response.code = 400;
@@ -520,6 +531,18 @@ VALUES
                     response.code = 400;
                     response.message =
                         "La fotografía de evidencia es obligatoria.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                if (string.IsNullOrWhiteSpace(
+                    data.MotivoRelevo))
+                {
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "El motivo del relevo es obligatorio.";
                     response.data = null;
 
                     return response;
@@ -584,23 +607,6 @@ VALUES
                         transaction);
 
                 // ============================================================
-                // ASIGNACION AFECTADA
-                // ============================================================
-
-                ServicioEmpleadoRelevoDto? afectada =
-                    await _data.ObtenerServicioEmpleadoAsync(
-                        conn,
-                        data.ServicioEmpleadoAfectadoId,
-                        ct,
-                        transaction);
-
-                if (afectada == null)
-                {
-                    throw new InvalidOperationException(
-                        "No existe la asignación del empleado que debía presentarse.");
-                }
-
-                // ============================================================
                 // ASIGNACION SALIENTE
                 // ============================================================
 
@@ -617,11 +623,87 @@ VALUES
                         "No existe la asignación del empleado saliente.");
                 }
 
-                if (afectada.ServicioId !=
-                    saliente.ServicioId)
+                // ============================================================
+                // ASISTENCIA ACTIVA SALIENTE
+                // ============================================================
+
+                var asistencia =
+                    await _integracion
+                        .ObtenerAsistenciaActivaPorServicioEmpleadoForUpdateAsync(
+                            conn,
+                            transaction,
+                            data.ServicioEmpleadoSalienteId.Value,
+                            ct);
+
+                if (asistencia == null ||
+                    asistencia.AsistenciaId != asistenciaSalienteId)
                 {
                     throw new InvalidOperationException(
-                        "La asignación afectada y la saliente pertenecen a servicios diferentes.");
+                        "La asistencia activa del empleado saliente cambió antes de procesar el Check-Out.");
+                }
+
+                bool esSalidaAnticipada =
+                    fechaActual <
+                    asistencia.FechaHoraSalidaProgramada;
+
+                if (esSalidaAnticipada &&
+                    string.IsNullOrWhiteSpace(
+                        data.MotivoNoPermanencia))
+                {
+                    transaction.Rollback();
+                    transaction = null;
+
+                    await EliminarArchivoSeguroAsync(
+                        rutaEvidencia,
+                        ct);
+
+                    rutaEvidencia = null;
+
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "El motivo de abandono es obligatorio cuando el Check-Out se realiza antes de finalizar el turno.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                // ============================================================
+                // AFECTADO
+                //
+                // SI ES SALIDA ANTICIPADA:
+                // EL SIGUIENTE EMPLEADO TODAVIA NO HA FALTADO.
+                // ============================================================
+
+                long? servicioEmpleadoAfectadoId =
+                    esSalidaAnticipada
+                        ? null
+                        : data.ServicioEmpleadoAfectadoId;
+
+                ServicioEmpleadoRelevoDto? afectada =
+                    null;
+
+                if (servicioEmpleadoAfectadoId.HasValue)
+                {
+                    afectada =
+                        await _data.ObtenerServicioEmpleadoAsync(
+                            conn,
+                            servicioEmpleadoAfectadoId.Value,
+                            ct,
+                            transaction);
+
+                    if (afectada == null)
+                    {
+                        throw new InvalidOperationException(
+                            "No existe la asignación del empleado que debía presentarse.");
+                    }
+
+                    if (afectada.ServicioId !=
+                        saliente.ServicioId)
+                    {
+                        throw new InvalidOperationException(
+                            "La asignación afectada y la saliente pertenecen a servicios diferentes.");
+                    }
                 }
 
                 // ============================================================
@@ -631,7 +713,10 @@ VALUES
                 bool existeSolicitud =
                     await _data.ExisteSolicitudActivaAsync(
                         conn,
-                        data.ServicioEmpleadoAfectadoId,
+                        servicioEmpleadoAfectadoId,
+                        data.ServicioEmpleadoSalienteId,
+                        data.FechaHoraInicioCobertura,
+                        data.FechaHoraFinCobertura,
                         ct,
                         transaction);
 
@@ -649,7 +734,7 @@ VALUES
                     response.isSuccess = false;
                     response.code = 409;
                     response.message =
-                        "Ya existe una solicitud de relevo activa para esta asignación.";
+                        "Ya existe una solicitud de relevo activa para esta cobertura.";
                     response.data = null;
 
                     return response;
@@ -727,8 +812,11 @@ VALUES
                             sqlSolicitud,
                             new
                             {
-                                data.ServicioEmpleadoAfectadoId,
-                                data.ServicioEmpleadoSalienteId,
+                                ServicioEmpleadoAfectadoId =
+                                    servicioEmpleadoAfectadoId,
+
+                                ServicioEmpleadoSalienteId =
+                                    data.ServicioEmpleadoSalienteId,
 
                                 OrigenId =
                                     origenId.Value,
@@ -761,18 +849,43 @@ VALUES
                             cancellationToken: ct));
 
                 // ============================================================
-                // INCIDENCIA DE FALTA
+                // INCIDENCIA FALTA
+                //
+                // SOLO EXISTE SI REALMENTE HABIA TURNO SIGUIENTE.
                 // ============================================================
 
-                await _integracion
-                    .RegistrarIncidenciaFaltaRelevoAsync(
-                        conn,
-                        transaction,
-                        afectada,
-                        data.FechaHoraInicioCobertura,
-                        numeroUsuario,
-                        fechaActual,
-                        ct);
+                if (afectada != null)
+                {
+                    await _integracion
+                        .RegistrarIncidenciaFaltaRelevoAsync(
+                            conn,
+                            transaction,
+                            afectada,
+                            data.FechaHoraInicioCobertura,
+                            numeroUsuario,
+                            fechaActual,
+                            ct);
+                }
+
+                // ============================================================
+                // INCIDENCIA ABANDONO
+                // ============================================================
+
+                if (esSalidaAnticipada &&
+                    realizarCheckOut)
+                {
+                    await _integracion
+                        .RegistrarIncidenciaAbandonoTurnoAsync(
+                            conn,
+                            transaction,
+                            asistenciaSalienteId,
+                            saliente,
+                            numeroUsuario,
+                            data.MotivoNoPermanencia!,
+                            fechaActual,
+                            numeroUsuario,
+                            ct);
+                }
 
                 // ============================================================
                 // CHECK-OUT SALIENTE
@@ -821,7 +934,7 @@ VALUES
                             solicitudId,
 
                         ServicioEmpleadoAfectadoId =
-                            data.ServicioEmpleadoAfectadoId,
+                            servicioEmpleadoAfectadoId,
 
                         ServicioEmpleadoSalienteId =
                             data.ServicioEmpleadoSalienteId,
@@ -859,31 +972,22 @@ VALUES
 
                 // ============================================================
                 // NOTIFICACION
-                //
-                // SOLO CUANDO EL EMPLEADO SALIENTE NO PUEDE PERMANECER.
-                //
-                // SI PUEDE PERMANECER:
-                // CrearExtensionAsync GENERARA
-                // RELEVO_EXTENSION_AUTORIZAR.
-                //
-                // SI NO PUEDE PERMANECER:
-                // LA SOLICITUD QUEDA LIBRE PARA QUE EL SUPERVISOR
-                // GESTIONE UNA NUEVA COBERTURA.
-                //
-                // SIEMPRE DESPUES DEL COMMIT.
                 // ============================================================
 
                 if (realizarCheckOut)
                 {
                     try
                     {
+                        ServicioEmpleadoRelevoDto servicioContexto =
+                            afectada ?? saliente;
+
                         var notificationResponse =
                             await _relevoNotificationFunctions
                                 .NotificarCoberturaRequeridaAsync(
-                                    afectada.ServicioId,
-                                    afectada.NombreServicio,
+                                    servicioContexto.ServicioId,
+                                    servicioContexto.NombreServicio,
                                     solicitudId,
-                                    afectada.ServicioEmpleadoId,
+                                    servicioEmpleadoAfectadoId,
                                     data.FechaHoraInicioCobertura,
                                     data.FechaHoraFinCobertura,
                                     data.MotivoRelevo.Trim(),
@@ -1553,7 +1657,9 @@ VALUES
                     return response;
                 }
 
-                using var conn = _data.CrearConexion();
+                using var conn =
+                    _data.CrearConexion();
+
                 await conn.OpenAsync(ct);
 
                 transaction =
@@ -1564,10 +1670,6 @@ VALUES
                         conn,
                         ct,
                         transaction);
-
-                // ====================================================
-                // SUPERVISOR
-                // ====================================================
 
                 EmpleadoRelevoDto? supervisor =
                     await _data.ObtenerEmpleadoPorNumeroUsuarioAsync(
@@ -1589,10 +1691,6 @@ VALUES
 
                     return response;
                 }
-
-                // ====================================================
-                // SOLICITUD BLOQUEADA
-                // ====================================================
 
                 SolicitudRelevoNoPlaneadoDto? solicitud =
                     await _data.ObtenerSolicitudForUpdateAsync(
@@ -1622,10 +1720,8 @@ VALUES
                         ct,
                         transaction);
 
-                if (estatusActual !=
-                        ESTATUS_PENDIENTE_ASIGNACION &&
-                    estatusActual !=
-                        ESTATUS_EN_PROCESO)
+                if (estatusActual != ESTATUS_PENDIENTE_ASIGNACION &&
+                    estatusActual != ESTATUS_EN_PROCESO)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -1641,26 +1737,28 @@ VALUES
                     return response;
                 }
 
-                // ====================================================
-                // ASIGNACION AFECTADA
-                // ====================================================
+                long? servicioEmpleadoContextoId =
+                    solicitud.ServicioEmpleadoAfectadoId
+                    ?? solicitud.ServicioEmpleadoSalienteId;
+
+                if (!servicioEmpleadoContextoId.HasValue)
+                {
+                    throw new InvalidOperationException(
+                        "La solicitud no tiene una asignación de servicio relacionada.");
+                }
 
                 ServicioEmpleadoRelevoDto? servicioEmpleado =
                     await _data.ObtenerServicioEmpleadoAsync(
                         conn,
-                        solicitud.ServicioEmpleadoAfectadoId,
+                        servicioEmpleadoContextoId.Value,
                         ct,
                         transaction);
 
                 if (servicioEmpleado == null)
                 {
                     throw new InvalidOperationException(
-                        "No existe la asignación afectada por la solicitud.");
+                        "No existe la asignación de servicio relacionada con la solicitud.");
                 }
-
-                // ====================================================
-                // ALCANCE SUPERVISOR
-                // ====================================================
 
                 bool tieneServicio =
                     await _data.EsSupervisorServicioAsync(
@@ -1685,10 +1783,6 @@ VALUES
                     return response;
                 }
 
-                // ====================================================
-                // NO CANCELAR COBERTURA YA GENERADA
-                // ====================================================
-
                 bool coberturaGenerada =
                     await _data.ExisteCoberturaGeneradaAsync(
                         conn,
@@ -1710,10 +1804,6 @@ VALUES
                     return response;
                 }
 
-                // ====================================================
-                // ESTATUS CANCELADA DE ASIGNACION
-                // ====================================================
-
                 int? estatusAsignacionCanceladaId =
                     await _data.ObtenerEstatusAsignacionIdAsync(
                         conn,
@@ -1726,10 +1816,6 @@ VALUES
                     throw new InvalidOperationException(
                         "No está configurado el estatus CANCELADA de asignaciones.");
                 }
-
-                // ====================================================
-                // CANCELAR PROPUESTAS ABIERTAS
-                // ====================================================
 
                 const string sqlCancelarAsignaciones = @"
 UPDATE A
@@ -1770,10 +1856,6 @@ WHERE A.SolicitudRelevoNoPlaneadoId =
                         transaction,
                         cancellationToken: ct));
 
-                // ====================================================
-                // ESTATUS CANCELADO SOLICITUD
-                // ====================================================
-
                 int? estatusCanceladoId =
                     await _data.ObtenerEstatusSolicitudIdAsync(
                         conn,
@@ -1786,10 +1868,6 @@ WHERE A.SolicitudRelevoNoPlaneadoId =
                     throw new InvalidOperationException(
                         "No está configurado el estatus CANCELADO.");
                 }
-
-                // ====================================================
-                // CANCELAR SOLICITUD
-                // ====================================================
 
                 const string sqlCancelarSolicitud = @"
 UPDATE dbo.SolicitudRelevoNoPlaneado
@@ -1898,7 +1976,8 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     "La información de la solicitud es obligatoria.";
             }
 
-            if (data.ServicioEmpleadoAfectadoId <= 0)
+            if (!data.ServicioEmpleadoAfectadoId.HasValue ||
+                data.ServicioEmpleadoAfectadoId.Value <= 0)
             {
                 return
                     "ServicioEmpleadoAfectadoId es obligatorio.";
@@ -1911,8 +1990,10 @@ WHERE SolicitudRelevoNoPlaneadoId = @SolicitudId
                     "ServicioEmpleadoSalienteId es inválido.";
             }
 
-            if (data.ServicioEmpleadoSalienteId ==
-                data.ServicioEmpleadoAfectadoId)
+            if (data.ServicioEmpleadoSalienteId.HasValue &&
+                data.ServicioEmpleadoAfectadoId.HasValue &&
+                data.ServicioEmpleadoSalienteId.Value ==
+                data.ServicioEmpleadoAfectadoId.Value)
             {
                 return
                     "La asignación saliente no puede ser la misma asignación que requiere cobertura.";

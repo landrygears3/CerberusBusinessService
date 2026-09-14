@@ -2347,6 +2347,205 @@ VALUES
 
         #endregion
 
+        #region CHECK-OUT AUXILIARES
+
+        private async Task FinalizarAsistenciaCheckOutAsync(
+            SqlConnection conn,
+            SqlTransaction transaction,
+            long asistenciaId,
+            string numeroUsuario,
+            DateTime fechaHoraCheckOut,
+            CancellationToken ct)
+        {
+            const string sql = @"
+UPDATE dbo.Asistencia
+SET
+    FechaHoraCheckOut = @FechaHoraCheckOut,
+    Estatus = @EstatusFinalizada,
+    FechaModificacion = @FechaModificacion,
+    UsuarioModificacion = @UsuarioModificacion
+WHERE AsistenciaId = @AsistenciaId
+  AND NumeroEmpleadoEntrante = @NumeroUsuario
+  AND Estatus = @EstatusEnTurno
+  AND FechaHoraCheckOut IS NULL;";
+
+            int rows =
+                await conn.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            FechaHoraCheckOut =
+                                fechaHoraCheckOut,
+
+                            EstatusFinalizada =
+                                ESTATUS_FINALIZADA,
+
+                            FechaModificacion =
+                                fechaHoraCheckOut,
+
+                            UsuarioModificacion =
+                                numeroUsuario,
+
+                            AsistenciaId =
+                                asistenciaId,
+
+                            NumeroUsuario =
+                                numeroUsuario,
+
+                            EstatusEnTurno =
+                                ESTATUS_EN_TURNO
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+            if (rows != 1)
+            {
+                throw new InvalidOperationException(
+                    "La asistencia cambió antes de completar el Check-Out.");
+            }
+        }
+
+        private async Task<long>
+            RegistrarIncidenciaAbandonoTurnoAsync(
+                SqlConnection conn,
+                SqlTransaction transaction,
+                AsistenciaActivaCheckOutDto asistencia,
+                string numeroUsuario,
+                string motivo,
+                DateTime fechaHoraActual,
+                CancellationToken ct)
+        {
+            const string sqlTipo = @"
+SELECT TOP (1)
+    TipoIncidenciaId,
+    AfectaNomina,
+    TipoAfectacionNomina,
+    MontoAfectacion
+FROM dbo.CAT_TIPO_INCIDENCIA
+WHERE Clave = 'ABANDONO_TURNO'
+  AND Estatus = 1;";
+
+            TipoIncidenciaDto? tipo =
+                await conn.QueryFirstOrDefaultAsync<
+                    TipoIncidenciaDto>(
+                    new CommandDefinition(
+                        sqlTipo,
+                        transaction:
+                            transaction,
+                        cancellationToken:
+                            ct));
+
+            if (tipo == null)
+            {
+                throw new InvalidOperationException(
+                    "No existe una configuración activa para la incidencia ABANDONO_TURNO.");
+            }
+
+            const string sqlExiste = @"
+SELECT TOP (1)
+    IncidenciaId
+FROM dbo.Incidencias
+    WITH (UPDLOCK, HOLDLOCK)
+WHERE TipoIncidenciaId = @TipoIncidenciaId
+  AND AsistenciaId = @AsistenciaId
+  AND Estatus = 1;";
+
+            long? existente =
+                await conn.ExecuteScalarAsync<long?>(
+                    new CommandDefinition(
+                        sqlExiste,
+                        new
+                        {
+                            tipo.TipoIncidenciaId,
+
+                            AsistenciaId =
+                                asistencia.AsistenciaId
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+            if (existente.HasValue)
+            {
+                return existente.Value;
+            }
+
+            const string sqlInsert = @"
+INSERT INTO dbo.Incidencias
+(
+    TipoIncidenciaId,
+    NumeroUsuario,
+    ServicioId,
+    AsignacionTurnoId,
+    AsistenciaId,
+    FechaIncidencia,
+    Descripcion,
+    AfectaNomina,
+    TipoAfectacionNomina,
+    MontoAfectacion,
+    Estatus,
+    UsuarioRegistro,
+    FechaRegistro
+)
+OUTPUT INSERTED.IncidenciaId
+VALUES
+(
+    @TipoIncidenciaId,
+    @NumeroUsuario,
+    @ServicioId,
+    @AsignacionTurnoId,
+    @AsistenciaId,
+    @FechaIncidencia,
+    @Descripcion,
+    @AfectaNomina,
+    @TipoAfectacionNomina,
+    @MontoAfectacion,
+    1,
+    @UsuarioRegistro,
+    @FechaRegistro
+);";
+
+            return await conn.ExecuteScalarAsync<long>(
+                new CommandDefinition(
+                    sqlInsert,
+                    new
+                    {
+                        tipo.TipoIncidenciaId,
+
+                        NumeroUsuario =
+                            numeroUsuario,
+
+                        ServicioId =
+                            asistencia.ServicioId,
+
+                        AsignacionTurnoId =
+                            asistencia.ServicioEmpleadoId,
+
+                        AsistenciaId =
+                            asistencia.AsistenciaId,
+
+                        FechaIncidencia =
+                            fechaHoraActual,
+
+                        Descripcion =
+                            "Abandono de turno. Motivo: " +
+                            motivo.Trim(),
+
+                        tipo.AfectaNomina,
+                        tipo.TipoAfectacionNomina,
+                        tipo.MontoAfectacion,
+
+                        UsuarioRegistro =
+                            numeroUsuario,
+
+                        FechaRegistro =
+                            fechaHoraActual
+                    },
+                    transaction,
+                    cancellationToken: ct));
+        }
+
+        #endregion
 
         #region R2
 
@@ -2591,6 +2790,12 @@ VALUES
                 AsistenciaActivaCheckOutDto asistencia,
                 CancellationToken ct)
         {
+            if (!asistencia.ServicioId.HasValue ||
+                !asistencia.ServicioEmpleadoId.HasValue)
+            {
+                return new List<RelevoEsperadoCheckOutResponse>();
+            }
+
             DateTime fechaRelevo =
                 asistencia.FechaHoraSalidaProgramada.Date;
 
@@ -2692,10 +2897,10 @@ ORDER BY
                         new
                         {
                             ServicioId =
-                                asistencia.ServicioId,
+                                asistencia.ServicioId.Value,
 
                             ServicioEmpleadoActualId =
-                                asistencia.ServicioEmpleadoId,
+                                asistencia.ServicioEmpleadoId.Value,
 
                             FechaRelevo =
                                 fechaRelevo,
@@ -2727,6 +2932,8 @@ SELECT TOP (1)
     AsistenciaId,
     ServicioId,
     ServicioEmpleadoId,
+    ServicioSupervisorId,
+    ServicioOficinaEmpleadoId,
     NumeroEmpleadoEntrante,
     FechaTurno,
     FechaHoraEntradaProgramada,
@@ -2743,7 +2950,6 @@ ORDER BY
 
             #endregion
 
-
             #region SQL FOR UPDATE
 
             const string sqlForUpdate = @"
@@ -2751,6 +2957,8 @@ SELECT TOP (1)
     AsistenciaId,
     ServicioId,
     ServicioEmpleadoId,
+    ServicioSupervisorId,
+    ServicioOficinaEmpleadoId,
     NumeroEmpleadoEntrante,
     FechaTurno,
     FechaHoraEntradaProgramada,
@@ -2767,14 +2975,12 @@ ORDER BY
 
             #endregion
 
-
             #region EJECUCION
 
             string sql =
                 transaction == null
                     ? sqlConsulta
                     : sqlForUpdate;
-
 
             return await conn.QueryFirstOrDefaultAsync<
                 AsistenciaActivaCheckOutDto>(
@@ -2793,6 +2999,7 @@ ORDER BY
 
             #endregion
         }
+
         #endregion
 
 
@@ -2810,11 +3017,10 @@ ORDER BY
 
             try
             {
-                // ============================================================
-                // VALIDAR USUARIO
-                // ============================================================
+                #region VALIDACIONES GENERALES
 
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
+                if (string.IsNullOrWhiteSpace(
+                    numeroUsuario))
                 {
                     response.isSuccess = false;
                     response.code = 401;
@@ -2824,13 +3030,6 @@ ORDER BY
 
                     return response;
                 }
-
-                numeroUsuario =
-                    numeroUsuario.Trim();
-
-                // ============================================================
-                // VALIDAR REQUEST
-                // ============================================================
 
                 if (data == null)
                 {
@@ -2843,7 +3042,8 @@ ORDER BY
                     return response;
                 }
 
-                if (data.ServicioEmpleadoAfectadoId <= 0)
+                if (data.ServicioEmpleadoAfectadoId.HasValue &&
+                    data.ServicioEmpleadoAfectadoId.Value <= 0)
                 {
                     response.isSuccess = false;
                     response.code = 400;
@@ -2854,43 +3054,22 @@ ORDER BY
                     return response;
                 }
 
-                if (data.FotoEvidencia == null ||
-                    data.FotoEvidencia.Length == 0)
-                {
-                    response.isSuccess = false;
-                    response.code = 400;
-                    response.message =
-                        "La fotografía de evidencia es obligatoria.";
-                    response.data = null;
+                numeroUsuario =
+                    numeroUsuario.Trim();
 
-                    return response;
-                }
-
-                if (!data.PuedePermanecer &&
-                    string.IsNullOrWhiteSpace(
-                        data.MotivoNoPermanencia))
-                {
-                    response.isSuccess = false;
-                    response.code = 400;
-                    response.message =
-                        "El motivo por el cual el empleado no puede permanecer es obligatorio.";
-                    response.data = null;
-
-                    return response;
-                }
-
-                // ============================================================
-                // CONEXION
-                // ============================================================
+                #endregion
 
                 using var conn =
                     new SqlConnection(_csCerberus);
 
                 await conn.OpenAsync(ct);
 
-                // ============================================================
-                // ASISTENCIA ACTIVA DEL EMPLEADO SALIENTE
-                // ============================================================
+                DateTime fechaHoraActual =
+                    await ObtenerFechaServidorAsync(
+                        conn,
+                        ct);
+
+                #region ASISTENCIA ACTIVA
 
                 AsistenciaActivaCheckOutDto? asistencia =
                     await ObtenerAsistenciaActivaCheckOutAsync(
@@ -2910,131 +3089,437 @@ ORDER BY
                     return response;
                 }
 
-                // ============================================================
-                // RELEVOS ESPERADOS DEL SIGUIENTE TURNO
-                // ============================================================
+                #endregion
 
-                List<RelevoEsperadoCheckOutResponse>
-                    relevosEsperados =
-                        await ObtenerRelevosEsperadosAsync(
+                bool salidaAnticipada =
+                    fechaHoraActual <
+                    asistencia.FechaHoraSalidaProgramada;
+
+                #region CHECK-OUT OFICINA
+
+                if (asistencia.ServicioOficinaEmpleadoId.HasValue)
+                {
+                    if (salidaAnticipada &&
+                        string.IsNullOrWhiteSpace(
+                            data.MotivoNoPermanencia))
+                    {
+                        response.isSuccess = false;
+                        response.code = 400;
+                        response.message =
+                            "El motivo de la salida anticipada es obligatorio.";
+                        response.data = null;
+
+                        return response;
+                    }
+
+                    SqlTransaction? transaction = null;
+
+                    try
+                    {
+                        transaction =
+                            conn.BeginTransaction();
+
+                        AsistenciaActivaCheckOutDto?
+                            asistenciaBloqueada =
+                                await ObtenerAsistenciaActivaCheckOutAsync(
+                                    conn,
+                                    numeroUsuario,
+                                    transaction,
+                                    ct);
+
+                        if (asistenciaBloqueada == null ||
+                            asistenciaBloqueada.AsistenciaId !=
+                            asistencia.AsistenciaId)
+                        {
+                            transaction.Rollback();
+                            transaction = null;
+
+                            response.isSuccess = false;
+                            response.code = 409;
+                            response.message =
+                                "La asistencia cambió antes de completar el Check-Out.";
+                            response.data = null;
+
+                            return response;
+                        }
+
+                        if (salidaAnticipada)
+                        {
+                            await RegistrarIncidenciaAbandonoTurnoAsync(
+                                conn,
+                                transaction,
+                                asistenciaBloqueada,
+                                numeroUsuario,
+                                data.MotivoNoPermanencia!,
+                                fechaHoraActual,
+                                ct);
+                        }
+
+                        await FinalizarAsistenciaCheckOutAsync(
                             conn,
-                            asistencia,
+                            transaction,
+                            asistenciaBloqueada.AsistenciaId,
+                            numeroUsuario,
+                            fechaHoraActual,
                             ct);
 
-                RelevoEsperadoCheckOutResponse? relevoAfectado =
-                    relevosEsperados.FirstOrDefault(
-                        x =>
-                            x.ServicioEmpleadoId ==
-                            data.ServicioEmpleadoAfectadoId);
+                        transaction.Commit();
+                        transaction = null;
 
-                if (relevoAfectado == null)
+                        response.isSuccess = true;
+                        response.code = 200;
+
+                        response.message =
+                            "Check-Out registrado correctamente.";
+
+                        response.desc =
+                            salidaAnticipada
+                                ? "Se registró la salida anticipada y la incidencia de abandono de turno."
+                                : "El turno de oficina fue finalizado correctamente.";
+
+                        response.data =
+                            new CheckOutRelevoResponse
+                            {
+                                AsistenciaId =
+                                    asistenciaBloqueada.AsistenciaId,
+
+                                ServicioId =
+                                    asistenciaBloqueada.ServicioId,
+
+                                ServicioEmpleadoSalienteId =
+                                    null,
+
+                                ServicioEmpleadoAfectadoId =
+                                    null,
+
+                                SolicitudRelevoNoPlaneadoId =
+                                    null,
+
+                                RelevoNoPlaneadoAsignacionId =
+                                    null,
+
+                                PuedePermanecer =
+                                    false,
+
+                                CheckOutRealizado =
+                                    true,
+
+                                FechaHoraCheckOut =
+                                    fechaHoraActual,
+
+                                SolicitudEstatusClave =
+                                    null,
+
+                                AsignacionEstatusClave =
+                                    null
+                            };
+
+                        return response;
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            transaction?.Rollback();
+                        }
+                        catch
+                        {
+                        }
+
+                        throw;
+                    }
+                }
+
+                #endregion
+
+                #region VALIDAR ASISTENCIA GUARDIA
+
+                if (!asistencia.ServicioId.HasValue ||
+                    !asistencia.ServicioEmpleadoId.HasValue)
                 {
                     response.isSuccess = false;
                     response.code = 409;
                     response.message =
-                        "La asignación seleccionada no corresponde al siguiente turno de este servicio.";
+                        "La asistencia activa no corresponde a un turno de guardia compatible con este flujo.";
                     response.data = null;
 
                     return response;
                 }
 
-                // ============================================================
-                // EL SALIENTE NO PUEDE SER EL AUSENTE
-                // ============================================================
+                #endregion
 
-                if (string.Equals(
-                    relevoAfectado.NumeroUsuario,
-                    numeroUsuario,
-                    StringComparison.OrdinalIgnoreCase))
+                /*
+                 * Si sale antes de terminar su propio turno,
+                 * el flujo se considera automáticamente como:
+                 *
+                 * PuedePermanecer = false.
+                 *
+                 * No existe un empleado afectado porque la cobertura
+                 * corresponde al turno que el mismo empleado está
+                 * abandonando.
+                 */
+                bool puedePermanecer =
+                    salidaAnticipada
+                        ? false
+                        : data.PuedePermanecer;
+
+                #region VALIDAR MOTIVO
+
+                if (!puedePermanecer &&
+                    string.IsNullOrWhiteSpace(
+                        data.MotivoNoPermanencia))
                 {
                     response.isSuccess = false;
-                    response.code = 409;
+                    response.code = 400;
+
                     response.message =
-                        "La asignación del siguiente turno pertenece al mismo empleado.";
+                        salidaAnticipada
+                            ? "El motivo del abandono de turno es obligatorio."
+                            : "El motivo por el cual el empleado no puede permanecer es obligatorio.";
+
                     response.data = null;
 
                     return response;
                 }
 
-                // ============================================================
-                // VALIDAR CHECK-IN DEL RELEVO
-                // ============================================================
+                #endregion
 
-                if (relevoAfectado.AsistenciaId.HasValue)
+                #region EVIDENCIA
+
+                if (data.FotoEvidencia == null ||
+                    data.FotoEvidencia.Length == 0)
                 {
-                    if (relevoAfectado.EstatusAsistencia ==
-                        ESTATUS_PENDIENTE_AUTORIZAR)
+                    response.isSuccess = false;
+                    response.code = 400;
+                    response.message =
+                        "La fotografía de evidencia es obligatoria.";
+                    response.data = null;
+
+                    return response;
+                }
+
+                #endregion
+
+                RelevoEsperadoCheckOutResponse?
+                    relevoAfectado =
+                        null;
+
+                DateTime fechaHoraInicioCobertura;
+                DateTime fechaHoraFinCobertura;
+                string motivoRelevo;
+
+                #region SALIDA ANTICIPADA
+
+                if (salidaAnticipada)
+                {
+                    /*
+                     * No se afecta al siguiente empleado.
+                     *
+                     * La cobertura requerida corresponde únicamente
+                     * al tiempo restante del turno abandonado.
+                     */
+
+                    fechaHoraInicioCobertura =
+                        fechaHoraActual;
+
+                    fechaHoraFinCobertura =
+                        asistencia.FechaHoraSalidaProgramada;
+
+                    motivoRelevo =
+                        "El empleado realizó Check-Out antes de concluir su turno. " +
+                        "Motivo: " +
+                        data.MotivoNoPermanencia!.Trim();
+                }
+
+                #endregion
+
+                #region FIN NORMAL DE TURNO
+
+                else
+                {
+                    List<RelevoEsperadoCheckOutResponse>
+                        relevosEsperados =
+                            await ObtenerRelevosEsperadosAsync(
+                                conn,
+                                asistencia,
+                                ct);
+
+                    if (data.ServicioEmpleadoAfectadoId.HasValue)
+                    {
+                        relevoAfectado =
+                            relevosEsperados
+                                .FirstOrDefault(
+                                    x =>
+                                        x.ServicioEmpleadoId ==
+                                        data.ServicioEmpleadoAfectadoId.Value);
+                    }
+
+                    /*
+                     * Si sí existen asignaciones para el siguiente turno,
+                     * debe identificarse cuál de ellas es la que faltó.
+                     */
+                    if (relevosEsperados.Count > 0 &&
+                        relevoAfectado == null)
                     {
                         response.isSuccess = false;
-                        response.code = 409;
-                        response.message =
-                            "El empleado de relevo ya realizó Check-In y está pendiente de autorización.";
+
+                        if (!data.ServicioEmpleadoAfectadoId.HasValue)
+                        {
+                            response.code = 400;
+                            response.message =
+                                "Debe indicar la asignación del siguiente turno que no se presentó.";
+                        }
+                        else
+                        {
+                            response.code = 409;
+                            response.message =
+                                "La asignación seleccionada no corresponde al siguiente turno de este servicio.";
+                        }
+
                         response.data = null;
 
                         return response;
                     }
 
-                    if (relevoAfectado.EstatusAsistencia ==
-                        ESTATUS_EN_TURNO)
+                    /*
+                     * Si NO existen asignaciones para el siguiente turno,
+                     * esto ya no es un error.
+                     *
+                     * La solicitud se genera sin empleado afectado.
+                     */
+                    if (relevoAfectado == null)
                     {
-                        response.isSuccess = false;
-                        response.code = 409;
-                        response.message =
-                            "El empleado de relevo ya se encuentra en turno.";
-                        response.data = null;
+                        TimeSpan duracionTurno =
+                            asistencia.FechaHoraSalidaProgramada -
+                            asistencia.FechaHoraEntradaProgramada;
 
-                        return response;
+                        if (duracionTurno <= TimeSpan.Zero)
+                        {
+                            response.isSuccess = false;
+                            response.code = 409;
+                            response.message =
+                                "No fue posible determinar la duración del turno para generar la cobertura.";
+                            response.data = null;
+
+                            return response;
+                        }
+
+                        fechaHoraInicioCobertura =
+                            asistencia.FechaHoraSalidaProgramada;
+
+                        fechaHoraFinCobertura =
+                            fechaHoraInicioCobertura
+                                .Add(duracionTurno);
+
+                        motivoRelevo =
+                            "No existe una asignación programada para cubrir el siguiente turno.";
+                    }
+                    else
+                    {
+                        #region EL SALIENTE NO PUEDE SER EL AUSENTE
+
+                        if (string.Equals(
+                            relevoAfectado.NumeroUsuario,
+                            numeroUsuario,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            response.isSuccess = false;
+                            response.code = 409;
+                            response.message =
+                                "La asignación del siguiente turno pertenece al mismo empleado.";
+                            response.data = null;
+
+                            return response;
+                        }
+
+                        #endregion
+
+                        #region VALIDAR CHECK-IN DEL RELEVO
+
+                        if (relevoAfectado.AsistenciaId.HasValue)
+                        {
+                            if (relevoAfectado.EstatusAsistencia ==
+                                ESTATUS_PENDIENTE_AUTORIZAR)
+                            {
+                                response.isSuccess = false;
+                                response.code = 409;
+                                response.message =
+                                    "El empleado de relevo ya realizó Check-In y está pendiente de autorización.";
+                                response.data = null;
+
+                                return response;
+                            }
+
+                            if (relevoAfectado.EstatusAsistencia ==
+                                ESTATUS_EN_TURNO)
+                            {
+                                response.isSuccess = false;
+                                response.code = 409;
+                                response.message =
+                                    "El empleado de relevo ya se encuentra en turno.";
+                                response.data = null;
+
+                                return response;
+                            }
+                        }
+
+                        #endregion
+
+                        fechaHoraInicioCobertura =
+                            relevoAfectado
+                                .FechaHoraEntradaProgramada;
+
+                        fechaHoraFinCobertura =
+                            relevoAfectado
+                                .FechaHoraSalidaProgramada;
+
+                        motivoRelevo =
+                            "El empleado programado para el siguiente turno no se presentó al relevo.";
                     }
                 }
 
-                // ============================================================
-                // ARMAR SOLICITUD
-                // ============================================================
+                #endregion
+
+                #region ARMAR SOLICITUD
 
                 var solicitudRequest =
                     new CrearSolicitudRelevoNoPlaneadoDto
                     {
                         ServicioEmpleadoAfectadoId =
-                            relevoAfectado.ServicioEmpleadoId,
+                            relevoAfectado?
+                                .ServicioEmpleadoId,
 
                         ServicioEmpleadoSalienteId =
-                            asistencia.ServicioEmpleadoId,
+                            asistencia
+                                .ServicioEmpleadoId
+                                .Value,
 
                         OrigenClave =
                             "ASISTENCIA",
 
                         FechaHoraInicioCobertura =
-                            relevoAfectado
-                                .FechaHoraEntradaProgramada,
+                            fechaHoraInicioCobertura,
 
                         FechaHoraFinCobertura =
-                            relevoAfectado
-                                .FechaHoraSalidaProgramada,
+                            fechaHoraFinCobertura,
 
                         MotivoRelevo =
-                            "El empleado programado para el siguiente turno no se presentó al relevo.",
+                            motivoRelevo,
 
                         MotivoNoPermanencia =
-                            data.PuedePermanecer
+                            puedePermanecer
                                 ? null
-                                : data.MotivoNoPermanencia!
+                                : data
+                                    .MotivoNoPermanencia!
                                     .Trim(),
 
                         FotoEvidencia =
                             data.FotoEvidencia
                     };
 
-                // ============================================================
-                // CREAR SOLICITUD
-                //
-                // MISMA TRANSACCION:
-                // - SOLICITUD
-                // - INCIDENCIA
-                // - CHECK-OUT SI NO PUEDE PERMANECER
-                //
-                // DESPUES DEL COMMIT:
-                // - NOTIFICACION SI QUEDA SIN COBERTURA
-                // ============================================================
+                #endregion
+
+                #region CREAR SOLICITUD
 
                 ResponseModel<SolicitudRelevoNoPlaneadoDto>
                     solicitudResponse =
@@ -3043,7 +3528,7 @@ ORDER BY
                                 solicitudRequest,
                                 asistencia.AsistenciaId,
                                 realizarCheckOut:
-                                    !data.PuedePermanecer,
+                                    !puedePermanecer,
                                 numeroUsuario,
                                 accessToken,
                                 ct);
@@ -3064,14 +3549,15 @@ ORDER BY
                 }
 
                 long solicitudId =
-                    solicitudResponse.data
+                    solicitudResponse
+                        .data
                         .SolicitudRelevoNoPlaneadoId;
 
-                // ============================================================
-                // PUEDE PERMANECER -> PROPUESTA EXTENSION
-                // ============================================================
+                #endregion
 
-                if (data.PuedePermanecer)
+                #region PUEDE PERMANECER - EXTENSION
+
+                if (puedePermanecer)
                 {
                     ResponseModel<RelevoNoPlaneadoAsignacionDto>
                         extensionResponse =
@@ -3113,7 +3599,8 @@ ORDER BY
                                     asistencia.ServicioEmpleadoId,
 
                                 ServicioEmpleadoAfectadoId =
-                                    relevoAfectado.ServicioEmpleadoId,
+                                    relevoAfectado?
+                                        .ServicioEmpleadoId,
 
                                 SolicitudRelevoNoPlaneadoId =
                                     solicitudId,
@@ -3165,13 +3652,15 @@ ORDER BY
                                 asistencia.ServicioEmpleadoId,
 
                             ServicioEmpleadoAfectadoId =
-                                relevoAfectado.ServicioEmpleadoId,
+                                relevoAfectado?
+                                    .ServicioEmpleadoId,
 
                             SolicitudRelevoNoPlaneadoId =
                                 solicitudId,
 
                             RelevoNoPlaneadoAsignacionId =
-                                extensionResponse.data
+                                extensionResponse
+                                    .data
                                     .RelevoNoPlaneadoAsignacionId,
 
                             PuedePermanecer =
@@ -3193,18 +3682,30 @@ ORDER BY
                     return response;
                 }
 
-                // ============================================================
-                // NO PUEDE PERMANECER
-                // ============================================================
+                #endregion
+
+                #region CHECK-OUT REALIZADO
 
                 response.isSuccess = true;
                 response.code = 200;
                 response.message =
                     "Check-Out registrado correctamente.";
 
-                response.desc =
-                    "Se registró la falta del empleado entrante y " +
-                    "la solicitud de relevo quedó pendiente de asignación.";
+                if (salidaAnticipada)
+                {
+                    response.desc =
+                        "Se registró el abandono de turno y se generó la solicitud de cobertura por el tiempo restante.";
+                }
+                else if (relevoAfectado != null)
+                {
+                    response.desc =
+                        "Se registró la falta del empleado entrante y la solicitud de relevo quedó pendiente de asignación.";
+                }
+                else
+                {
+                    response.desc =
+                        "No existe un empleado programado para el siguiente turno. La solicitud de cobertura quedó pendiente de asignación.";
+                }
 
                 if (!string.IsNullOrWhiteSpace(
                     solicitudResponse.desc))
@@ -3227,7 +3728,8 @@ ORDER BY
                             asistencia.ServicioEmpleadoId,
 
                         ServicioEmpleadoAfectadoId =
-                            relevoAfectado.ServicioEmpleadoId,
+                            relevoAfectado?
+                                .ServicioEmpleadoId,
 
                         SolicitudRelevoNoPlaneadoId =
                             solicitudId,
@@ -3242,7 +3744,8 @@ ORDER BY
                             true,
 
                         FechaHoraCheckOut =
-                            solicitudResponse.data
+                            solicitudResponse
+                                .data
                                 .FechaRegistro,
 
                         SolicitudEstatusClave =
@@ -3253,13 +3756,15 @@ ORDER BY
                     };
 
                 return response;
+
+                #endregion
             }
             catch (OperationCanceledException)
             {
                 response.isSuccess = false;
                 response.code = 408;
                 response.message =
-                    "La operación de Check-Out sin relevo fue cancelada.";
+                    "La operación de Check-Out fue cancelada.";
                 response.data = null;
 
                 return response;
@@ -3269,7 +3774,7 @@ ORDER BY
                 response.isSuccess = false;
                 response.code = 500;
                 response.message =
-                    "Error SQL al procesar el Check-Out sin relevo.";
+                    "Error SQL al procesar el Check-Out.";
                 response.desc = ex.Message;
                 response.data = null;
 
@@ -3280,7 +3785,7 @@ ORDER BY
                 response.isSuccess = false;
                 response.code = 500;
                 response.message =
-                    "Error al procesar el Check-Out sin relevo.";
+                    "Error al procesar el Check-Out.";
                 response.desc = ex.Message;
                 response.data = null;
 
@@ -3411,5 +3916,6 @@ ORDER BY
         }
 
         #endregion
+
     }
 }

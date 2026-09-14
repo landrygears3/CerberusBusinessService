@@ -64,32 +64,37 @@ namespace CerberusBusinessService.Functions.Relevos
 
                 await conn.OpenAsync(ct);
 
-                // ====================================================
-                // SOLICITUD
-                // ====================================================
-
                 const string sqlSolicitud = @"
 SELECT
     SR.SolicitudRelevoNoPlaneadoId,
     SR.ServicioEmpleadoAfectadoId,
     SR.ServicioEmpleadoSalienteId,
 
-    SE.ServicioId,
+    COALESCE(
+        SEA.ServicioId,
+        SES.ServicioId
+    ) AS ServicioId,
+
     S.NombreServicio,
 
-    SE.EmpleadoId AS EmpleadoAfectadoId,
+    SEA.EmpleadoId AS EmpleadoAfectadoId,
 
-    ISNULL(
-        LTRIM(RTRIM(E.UsuarioAsignado)),
-        ''
-    ) AS NumeroUsuarioAfectado,
+    CASE
+        WHEN SEA.EmpleadoId IS NULL
+            THEN NULL
+        ELSE LTRIM(RTRIM(E.UsuarioAsignado))
+    END AS NumeroUsuarioAfectado,
 
-    CONCAT_WS(
-        ' ',
-        NULLIF(LTRIM(RTRIM(E.Nombres)), ''),
-        NULLIF(LTRIM(RTRIM(E.ApellidoPaterno)), ''),
-        NULLIF(LTRIM(RTRIM(E.ApellidoMaterno)), '')
-    ) AS NombreEmpleadoAfectado,
+    CASE
+        WHEN SEA.EmpleadoId IS NULL
+            THEN NULL
+        ELSE CONCAT_WS(
+            ' ',
+            NULLIF(LTRIM(RTRIM(E.Nombres)), ''),
+            NULLIF(LTRIM(RTRIM(E.ApellidoPaterno)), ''),
+            NULLIF(LTRIM(RTRIM(E.ApellidoMaterno)), '')
+        )
+    END AS NombreEmpleadoAfectado,
 
     O.Clave AS OrigenClave,
     O.Nombre AS OrigenNombre,
@@ -108,17 +113,24 @@ SELECT
 
 FROM dbo.SolicitudRelevoNoPlaneado SR
 
-INNER JOIN dbo.ServicioEmpleado SE
-    ON SE.ServicioEmpleadoId =
+LEFT JOIN dbo.ServicioEmpleado SEA
+    ON SEA.ServicioEmpleadoId =
        SR.ServicioEmpleadoAfectadoId
+
+LEFT JOIN dbo.ServicioEmpleado SES
+    ON SES.ServicioEmpleadoId =
+       SR.ServicioEmpleadoSalienteId
 
 INNER JOIN dbo.Servicio S
     ON S.ServicioId =
-       SE.ServicioId
+       COALESCE(
+           SEA.ServicioId,
+           SES.ServicioId
+       )
 
-INNER JOIN dbo.DatosGeneralesEmpleado E
+LEFT JOIN dbo.DatosGeneralesEmpleado E
     ON E.ID =
-       SE.EmpleadoId
+       SEA.EmpleadoId
 
 INNER JOIN dbo.CAT_RelevoNoPlaneadoOrigen O
     ON O.RelevoNoPlaneadoOrigenId =
@@ -153,10 +165,6 @@ WHERE SR.SolicitudRelevoNoPlaneadoId =
 
                     return response;
                 }
-
-                // ====================================================
-                // HISTORIAL DE ASIGNACIONES
-                // ====================================================
 
                 const string sqlAsignaciones = @"
 SELECT
@@ -238,8 +246,7 @@ ORDER BY
                 response.message =
                     "Solicitud de relevo obtenida correctamente.";
                 response.desc = null;
-                response.data =
-                    solicitud;
+                response.data = solicitud;
 
                 return response;
             }
@@ -249,8 +256,7 @@ ORDER BY
                 response.code = 500;
                 response.message =
                     "Error SQL al obtener la solicitud de relevo.";
-                response.desc =
-                    ex.Message;
+                response.desc = ex.Message;
                 response.data = null;
 
                 return response;
@@ -261,8 +267,7 @@ ORDER BY
                 response.code = 500;
                 response.message =
                     "Error al obtener la solicitud de relevo.";
-                response.desc =
-                    ex.Message;
+                response.desc = ex.Message;
                 response.data = null;
 
                 return response;
@@ -411,7 +416,11 @@ SELECT
     SR.SolicitudRelevoNoPlaneadoId,
     A.RelevoNoPlaneadoAsignacionId,
 
-    SE.ServicioId,
+    COALESCE(
+        SEA.ServicioId,
+        SES.ServicioId
+    ) AS ServicioId,
+
     S.NombreServicio,
 
     SR.ServicioEmpleadoAfectadoId,
@@ -431,13 +440,20 @@ INNER JOIN dbo.SolicitudRelevoNoPlaneado SR
     ON SR.SolicitudRelevoNoPlaneadoId =
        A.SolicitudRelevoNoPlaneadoId
 
-INNER JOIN dbo.ServicioEmpleado SE
-    ON SE.ServicioEmpleadoId =
+LEFT JOIN dbo.ServicioEmpleado SEA
+    ON SEA.ServicioEmpleadoId =
        SR.ServicioEmpleadoAfectadoId
+
+LEFT JOIN dbo.ServicioEmpleado SES
+    ON SES.ServicioEmpleadoId =
+       SR.ServicioEmpleadoSalienteId
 
 INNER JOIN dbo.Servicio S
     ON S.ServicioId =
-       SE.ServicioId
+       COALESCE(
+           SEA.ServicioId,
+           SES.ServicioId
+       )
 
 INNER JOIN dbo.CAT_RelevoTipoCobertura TC
     ON TC.RelevoTipoCoberturaId =
@@ -587,24 +603,33 @@ SELECT
 
     AP.RelevoNoPlaneadoAsignacionId,
 
-    SE.ServicioId,
+    COALESCE(
+        SEA.ServicioId,
+        SES.ServicioId
+    ) AS ServicioId,
+
     S.NombreServicio,
 
     SR.ServicioEmpleadoAfectadoId,
 
-    SE.EmpleadoId AS EmpleadoAfectadoId,
+    SEA.EmpleadoId AS EmpleadoAfectadoId,
 
-    ISNULL(
-        LTRIM(RTRIM(EA.UsuarioAsignado)),
-        ''
-    ) AS NumeroUsuarioAfectado,
+    CASE
+        WHEN SEA.EmpleadoId IS NULL
+            THEN NULL
+        ELSE LTRIM(RTRIM(EA.UsuarioAsignado))
+    END AS NumeroUsuarioAfectado,
 
-    CONCAT_WS(
-        ' ',
-        NULLIF(LTRIM(RTRIM(EA.Nombres)), ''),
-        NULLIF(LTRIM(RTRIM(EA.ApellidoPaterno)), ''),
-        NULLIF(LTRIM(RTRIM(EA.ApellidoMaterno)), '')
-    ) AS NombreEmpleadoAfectado,
+    CASE
+        WHEN SEA.EmpleadoId IS NULL
+            THEN NULL
+        ELSE CONCAT_WS(
+            ' ',
+            NULLIF(LTRIM(RTRIM(EA.Nombres)), ''),
+            NULLIF(LTRIM(RTRIM(EA.ApellidoPaterno)), ''),
+            NULLIF(LTRIM(RTRIM(EA.ApellidoMaterno)), '')
+        )
+    END AS NombreEmpleadoAfectado,
 
     O.Clave AS OrigenClave,
 
@@ -621,8 +646,7 @@ SELECT
     CASE
         WHEN AP.EmpleadoIdAsignado IS NULL
             THEN NULL
-        ELSE
-            LTRIM(RTRIM(EP.UsuarioAsignado))
+        ELSE LTRIM(RTRIM(EP.UsuarioAsignado))
     END AS NumeroUsuarioAsignado,
 
     CASE
@@ -643,17 +667,24 @@ SELECT
 
 FROM dbo.SolicitudRelevoNoPlaneado SR
 
-INNER JOIN dbo.ServicioEmpleado SE
-    ON SE.ServicioEmpleadoId =
+LEFT JOIN dbo.ServicioEmpleado SEA
+    ON SEA.ServicioEmpleadoId =
        SR.ServicioEmpleadoAfectadoId
+
+LEFT JOIN dbo.ServicioEmpleado SES
+    ON SES.ServicioEmpleadoId =
+       SR.ServicioEmpleadoSalienteId
 
 INNER JOIN dbo.Servicio S
     ON S.ServicioId =
-       SE.ServicioId
+       COALESCE(
+           SEA.ServicioId,
+           SES.ServicioId
+       )
 
-INNER JOIN dbo.DatosGeneralesEmpleado EA
+LEFT JOIN dbo.DatosGeneralesEmpleado EA
     ON EA.ID =
-       SE.EmpleadoId
+       SEA.EmpleadoId
 
 INNER JOIN dbo.CAT_RelevoNoPlaneadoOrigen O
     ON O.RelevoNoPlaneadoOrigenId =
@@ -716,7 +747,10 @@ AND EXISTS
     FROM dbo.ServicioSupervisor SS
 
     WHERE SS.ServicioId =
-          SE.ServicioId
+          COALESCE(
+              SEA.ServicioId,
+              SES.ServicioId
+          )
 
       AND SS.SupervisorEmpleadoId =
           @SupervisorEmpleadoId
