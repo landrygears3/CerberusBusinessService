@@ -4,13 +4,13 @@
     {
         public long AsistenciaId { get; set; }
 
-        public long ServicioEmpleadoId { get; set; }
+        public long? ServicioEmpleadoId { get; set; }
 
-        public int ServicioId { get; set; }
+        public int? ServicioId { get; set; }
 
         public string NumeroEmpleadoEntrante { get; set; } = null!;
 
-        public string NumeroEmpleadoSaliente { get; set; } = null!;
+        public string? NumeroEmpleadoSaliente { get; set; }
 
         public DateTime FechaTurno { get; set; }
 
