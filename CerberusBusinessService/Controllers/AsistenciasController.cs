@@ -1,4 +1,4 @@
-﻿using CerberusBusinessService.Functions;
+using CerberusBusinessService.Functions;
 using CerberusBusinessService.Functions.Asistencias;
 using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Asistencias;
@@ -26,6 +26,9 @@ namespace CerberusBusinessService.Controllers
         private readonly AsistenciaCheckInFunctions
             _asistenciaCheckInFunctions;
 
+        private readonly AsistenciaCheckOutFunctions
+            _asistenciaCheckOutFunctions;
+
         private readonly ValidaAccionFunction
             _abac;
 
@@ -36,7 +39,8 @@ namespace CerberusBusinessService.Controllers
         public AsistenciasController(
             ValidaAccionFunction abac,
             AsistenciasFunctions asistenciasFunctions,
-            AsistenciaCheckInFunctions asistenciaCheckInFunctions)
+            AsistenciaCheckInFunctions asistenciaCheckInFunctions,
+            AsistenciaCheckOutFunctions asistenciaCheckOutFunctions)
         {
             _abac =
                 abac;
@@ -46,6 +50,9 @@ namespace CerberusBusinessService.Controllers
 
             _asistenciaCheckInFunctions =
                 asistenciaCheckInFunctions;
+
+            _asistenciaCheckOutFunctions =
+                asistenciaCheckOutFunctions;
         }
 
         #endregion
@@ -233,14 +240,6 @@ namespace CerberusBusinessService.Controllers
                     "El request es obligatorio.");
             }
 
-            if (request.ServicioEmpleadoAfectadoId <= 0)
-            {
-                return CrearError<
-                    CheckOutRelevoResponse>(
-                    400,
-                    "ServicioEmpleadoAfectadoId es inválido.");
-            }
-
             if (request.FotoEvidencia == null ||
                 request.FotoEvidencia.Length == 0)
             {
@@ -250,19 +249,9 @@ namespace CerberusBusinessService.Controllers
                     "La fotografía de evidencia es obligatoria.");
             }
 
-            if (!request.PuedePermanecer &&
-                string.IsNullOrWhiteSpace(
-                    request.MotivoNoPermanencia))
-            {
-                return CrearError<
-                    CheckOutRelevoResponse>(
-                    400,
-                    "El motivo por el cual el empleado no puede permanecer es obligatorio.");
-            }
-
             try
             {
-                return await _asistenciasFunctions
+                return await _asistenciaCheckOutFunctions
                     .ProcesarCheckOutSinRelevoAsync(
                         request,
                         numeroUsuario,
