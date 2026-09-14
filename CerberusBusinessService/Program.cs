@@ -108,9 +108,14 @@ builder.Services.AddScoped<SaludFunctions>();
 #region ARCHIVOS
 
 builder.Services.AddScoped<FileEmpleadoService>();
+
 builder.Services.AddScoped<FileCandidatoService>();
+
 builder.Services.AddScoped<FileAsistenciaService>();
+
 builder.Services.AddScoped<FileRelevoNoPlaneadoService>();
+
+builder.Services.AddScoped<FileRutaService>();
 
 #endregion
 
