@@ -4293,5 +4293,191 @@ ORDER BY
 
         #endregion
 
+        #region HORARIO SALIDA ASISTENCIA
+
+        public async Task<
+            ResponseModel<HorarioSalidaAsistenciaResponse>>
+            ObtenerHorarioSalidaAsistenciaAsync(
+                HorarioSalidaAsistenciaRequest request,
+                CancellationToken ct)
+        {
+            ResponseModel<HorarioSalidaAsistenciaResponse> response =
+                new ResponseModel<HorarioSalidaAsistenciaResponse>();
+
+
+            #region VALIDACIONES
+
+            if (request == null)
+            {
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    400;
+
+                response.message =
+                    "El request es obligatorio.";
+
+                response.desc =
+                    null;
+
+                response.data =
+                    null;
+
+                return response;
+            }
+
+
+            if (request.AsistenciaId <= 0)
+            {
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    400;
+
+                response.message =
+                    "AsistenciaId es obligatorio.";
+
+                response.desc =
+                    "AsistenciaId debe ser mayor a cero.";
+
+                response.data =
+                    null;
+
+                return response;
+            }
+
+            #endregion
+
+
+            try
+            {
+                using var conn =
+                    new SqlConnection(
+                        _csCerberus);
+
+
+                await conn.OpenAsync(
+                    ct);
+
+
+                #region OBTENER ASISTENCIA
+
+                const string sql = @"
+SELECT
+    AsistenciaId,
+    FechaHoraSalidaProgramada
+FROM dbo.Asistencia
+WHERE AsistenciaId = @AsistenciaId;";
+
+
+                HorarioSalidaAsistenciaResponse? horario =
+                    await conn.QueryFirstOrDefaultAsync<
+                        HorarioSalidaAsistenciaResponse>(
+                        new CommandDefinition(
+                            sql,
+                            new
+                            {
+                                request.AsistenciaId
+                            },
+                            cancellationToken: ct));
+
+                #endregion
+
+
+                #region VALIDAR RESULTADO
+
+                if (horario == null)
+                {
+                    response.isSuccess =
+                        false;
+
+                    response.code =
+                        404;
+
+                    response.message =
+                        "Asistencia no encontrada.";
+
+                    response.desc =
+                        $"No existe una asistencia con el Id {request.AsistenciaId}.";
+
+                    response.data =
+                        null;
+
+                    return response;
+                }
+
+                #endregion
+
+
+                #region RESPONSE
+
+                response.isSuccess =
+                    true;
+
+                response.code =
+                    200;
+
+                response.message =
+                    "Horario de salida obtenido correctamente.";
+
+                response.desc =
+                    null;
+
+                response.data =
+                    horario;
+
+
+                return response;
+
+                #endregion
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (SqlException ex)
+            {
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    500;
+
+                response.message =
+                    "Error SQL al obtener el horario de salida.";
+
+                response.desc =
+                    ex.Message;
+
+                response.data =
+                    null;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    500;
+
+                response.message =
+                    "Error al obtener el horario de salida.";
+
+                response.desc =
+                    ex.Message;
+
+                response.data =
+                    null;
+
+                return response;
+            }
+        }
+
+        #endregion
+
     }
 }

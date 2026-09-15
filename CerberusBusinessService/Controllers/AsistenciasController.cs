@@ -394,5 +394,84 @@ namespace CerberusBusinessService.Controllers
         }
 
         #endregion
+
+        #region HORARIO SALIDA ASISTENCIA
+
+[HttpPost("GetHorarioSalidaAsistencia")]
+[Authorize]
+public async Task<
+    ResponseModel<HorarioSalidaAsistenciaResponse>>
+    GetHorarioSalidaAsistencia(
+        [FromBody]
+        HorarioSalidaAsistenciaRequest request,
+        CancellationToken ct)
+{
+    #region VALIDAR TOKEN
+
+    if (!TryGetBearerToken(
+        out _,
+        out _))
+    {
+        return CrearError<
+            HorarioSalidaAsistenciaResponse>(
+                401,
+                "No fue posible obtener un token de autorización válido.");
+    }
+
+    #endregion
+
+
+    #region VALIDAR REQUEST
+
+    if (request == null)
+    {
+        return CrearError<
+            HorarioSalidaAsistenciaResponse>(
+                400,
+                "El request es obligatorio.");
+    }
+
+
+    if (request.AsistenciaId <= 0)
+    {
+        return CrearError<
+            HorarioSalidaAsistenciaResponse>(
+                400,
+                "AsistenciaId es obligatorio.",
+                "AsistenciaId debe ser mayor a cero.");
+    }
+
+    #endregion
+
+
+    try
+    {
+        #region OBTENER HORARIO
+
+        return await _asistenciasFunctions
+            .ObtenerHorarioSalidaAsistenciaAsync(
+                request,
+                ct);
+
+        #endregion
+    }
+    catch (OperationCanceledException)
+    {
+        return CrearError<
+            HorarioSalidaAsistenciaResponse>(
+                408,
+                "La consulta del horario de salida fue cancelada.");
+    }
+    catch (Exception ex)
+    {
+        return CrearError<
+            HorarioSalidaAsistenciaResponse>(
+                500,
+                "Error al obtener el horario de salida.",
+                ex.Message);
+    }
+}
+
+#endregion
     }
 }
