@@ -4182,110 +4182,386 @@ ORDER BY
             ResponseModel<List<MiAsistenciaResponse>> response =
                 new ResponseModel<List<MiAsistenciaResponse>>();
 
+
+            #region VALIDACIONES
+
+            if (string.IsNullOrWhiteSpace(
+                numeroUsuario))
+            {
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    401;
+
+                response.message =
+                    "No fue posible identificar al empleado.";
+
+                response.desc =
+                    null;
+
+                response.data =
+                    null;
+
+                return response;
+            }
+
+
+            numeroUsuario =
+                numeroUsuario.Trim();
+
+            #endregion
+
+
             try
             {
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
-                {
-                    response.isSuccess = false;
-                    response.code = 401;
-                    response.message =
-                        "No fue posible identificar al empleado.";
-                    response.data = null;
-
-                    return response;
-                }
-
                 using var conn =
-                    new SqlConnection(_csCerberus);
+                    new SqlConnection(
+                        _csCerberus);
 
-                await conn.OpenAsync(ct);
+
+                await conn.OpenAsync(
+                    ct);
+
+
+                #region CONSULTA
 
                 const string sql = @"
 SELECT
     A.AsistenciaId,
+
     A.ServicioId,
+
     A.ServicioEmpleadoId,
-    A.FechaTurno AS Fecha,
 
-    S.NombreServicio AS Servicio,
+    A.ServicioSupervisorId,
 
-    CONCAT_WS(
-        ' ',
-        NULLIF(LTRIM(RTRIM(R.Nombres)), ''),
-        NULLIF(LTRIM(RTRIM(R.ApellidoPaterno)), ''),
-        NULLIF(LTRIM(RTRIM(R.ApellidoMaterno)), '')
-    ) AS Relevo,
+    A.ServicioOficinaEmpleadoId,
 
-    A.FechaHoraCheckIn AS CheckIn,
-    A.FechaHoraCheckOut AS CheckOut,
 
     CASE
-        WHEN A.Estatus = 3 THEN 'AUTORIZANDO'
-        WHEN A.Estatus IN (1, 2) THEN 'ASISTENCIA'
+        WHEN A.ServicioOficinaEmpleadoId IS NOT NULL
+            THEN 'OFICINA'
+
+        WHEN A.ServicioSupervisorId IS NOT NULL
+            THEN 'SUPERVISOR'
+
+        WHEN A.ServicioEmpleadoId IS NOT NULL
+            THEN 'EMPLEADO'
+
+        ELSE 'DESCONOCIDO'
+    END AS TipoOrigen,
+
+
+    A.FechaTurno AS Fecha,
+
+
+    CASE
+
+        /*
+         * ==========================================
+         * OFICINA
+         * ==========================================
+         */
+        WHEN A.ServicioOficinaEmpleadoId IS NOT NULL
+            THEN COALESCE
+            (
+                NULLIF(
+                    LTRIM(
+                        RTRIM(
+                            SO.NombreServicio
+                        )
+                    ),
+                    ''
+                ),
+
+                NULLIF(
+                    LTRIM(
+                        RTRIM(
+                            O.Nombre
+                        )
+                    ),
+                    ''
+                ),
+
+                'Oficina'
+            )
+
+
+        /*
+         * ==========================================
+         * EMPLEADO / SUPERVISOR
+         * ==========================================
+         */
+        ELSE COALESCE
+        (
+            NULLIF(
+                LTRIM(
+                    RTRIM(
+                        S.NombreServicio
+                    )
+                ),
+                ''
+            ),
+
+            'Servicio'
+        )
+
+    END AS Servicio,
+
+
+    /*
+     * El relevo únicamente tiene sentido
+     * para las asistencias normales de servicio.
+     *
+     * Supervisor y Oficina no manejan
+     * NumeroEmpleadoSaliente.
+     */
+    CASE
+        WHEN A.ServicioEmpleadoId IS NOT NULL
+            THEN NULLIF
+            (
+                CONCAT_WS
+                (
+                    ' ',
+
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(
+                                R.Nombres
+                            )
+                        ),
+                        ''
+                    ),
+
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(
+                                R.ApellidoPaterno
+                            )
+                        ),
+                        ''
+                    ),
+
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(
+                                R.ApellidoMaterno
+                            )
+                        ),
+                        ''
+                    )
+                ),
+
+                ''
+            )
+
+        ELSE NULL
+    END AS Relevo,
+
+
+    A.FechaHoraCheckIn AS CheckIn,
+
+    A.FechaHoraCheckOut AS CheckOut,
+
+
+    CASE
+        WHEN A.Estatus = 3
+            THEN 'AUTORIZANDO'
+
+        WHEN A.Estatus IN (1, 2)
+            THEN 'ASISTENCIA'
+
         ELSE 'ASISTENCIA'
     END AS Estado,
 
+
     CASE
-        WHEN A.Estatus = 3 THEN 'Autorizando'
-        WHEN A.Estatus IN (1, 2) THEN 'Asistencia'
+        WHEN A.Estatus = 3
+            THEN 'Autorizando'
+
+        WHEN A.Estatus IN (1, 2)
+            THEN 'Asistencia'
+
         ELSE 'Asistencia'
     END AS EstadoDescripcion
 
+
 FROM dbo.Asistencia A
 
-INNER JOIN dbo.Servicio S
-    ON S.ServicioId = A.ServicioId
+
+/*
+ * ============================================================
+ * SERVICIO NORMAL / SUPERVISION
+ * ============================================================
+ *
+ * IMPORTANTE:
+ *
+ * Antes era INNER JOIN.
+ *
+ * Eso provocaba que cualquier asistencia de oficina
+ * desapareciera porque una asistencia de oficina
+ * tiene ServicioId NULL.
+ */
+LEFT JOIN dbo.Servicio S
+    ON S.ServicioId =
+       A.ServicioId
+
+
+/*
+ * ============================================================
+ * OFICINA
+ * ============================================================
+ */
+
+LEFT JOIN dbo.ServicioOficinaEmpleado SOE
+    ON SOE.ServicioOficinaEmpleadoId =
+       A.ServicioOficinaEmpleadoId
+
+
+LEFT JOIN dbo.ServicioOficina SO
+    ON SO.ServicioOficinaId =
+       SOE.ServicioOficinaId
+
+
+LEFT JOIN dbo.Oficinas O
+    ON O.OficinaId =
+       SO.OficinaId
+
+
+/*
+ * ============================================================
+ * RELEVO
+ * ============================================================
+ */
 
 LEFT JOIN dbo.DatosGeneralesEmpleado R
-    ON LTRIM(RTRIM(R.UsuarioAsignado)) =
-       LTRIM(RTRIM(A.NumeroEmpleadoSaliente))
+    ON LTRIM(
+           RTRIM(
+               R.UsuarioAsignado
+           )
+       ) =
+       LTRIM(
+           RTRIM(
+               A.NumeroEmpleadoSaliente
+           )
+       )
 
-WHERE LTRIM(RTRIM(A.NumeroEmpleadoEntrante)) =
+
+/*
+ * ============================================================
+ * USUARIO AUTENTICADO
+ * ============================================================
+ *
+ * No importa de qué origen sea la asistencia:
+ *
+ * - EMPLEADO
+ * - SUPERVISOR
+ * - OFICINA
+ *
+ * Si NumeroEmpleadoEntrante corresponde al usuario
+ * autenticado, la asistencia se devuelve.
+ */
+
+WHERE LTRIM(
+          RTRIM(
+              A.NumeroEmpleadoEntrante
+          )
+      ) =
       @NumeroUsuario
+
 
 ORDER BY
     A.FechaTurno DESC,
+
+    A.FechaHoraCheckIn DESC,
+
     A.AsistenciaId DESC;";
 
-                var result =
-                    await conn.QueryAsync<MiAsistenciaResponse>(
+                #endregion
+
+
+                #region EJECUTAR CONSULTA
+
+                IEnumerable<MiAsistenciaResponse> result =
+                    await conn.QueryAsync<
+                        MiAsistenciaResponse>(
                         new CommandDefinition(
                             sql,
                             new
                             {
                                 NumeroUsuario =
-                                    numeroUsuario.Trim()
+                                    numeroUsuario
                             },
-                            cancellationToken: ct));
+                            cancellationToken:
+                                ct));
 
-                response.isSuccess = true;
-                response.code = 200;
+                #endregion
+
+
+                #region RESPONSE
+
+                response.isSuccess =
+                    true;
+
+                response.code =
+                    200;
+
                 response.message =
                     "Asistencias obtenidas correctamente.";
-                response.desc = null;
-                response.data = result.ToList();
+
+                response.desc =
+                    null;
+
+                response.data =
+                    result.ToList();
+
 
                 return response;
+
+                #endregion
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (SqlException ex)
             {
-                response.isSuccess = false;
-                response.code = 500;
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    500;
+
                 response.message =
                     "Error SQL al obtener las asistencias.";
-                response.desc = ex.Message;
-                response.data = null;
+
+                response.desc =
+                    ex.Message;
+
+                response.data =
+                    null;
+
 
                 return response;
             }
             catch (Exception ex)
             {
-                response.isSuccess = false;
-                response.code = 500;
+                response.isSuccess =
+                    false;
+
+                response.code =
+                    500;
+
                 response.message =
                     "Error al obtener las asistencias.";
-                response.desc = ex.Message;
-                response.data = null;
+
+                response.desc =
+                    ex.Message;
+
+                response.data =
+                    null;
+
 
                 return response;
             }

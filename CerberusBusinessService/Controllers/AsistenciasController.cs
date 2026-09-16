@@ -265,29 +265,22 @@ namespace CerberusBusinessService.Controllers
             MisAsistencias(
                 CancellationToken ct)
         {
+            #region VALIDAR TOKEN
+
             if (!TryGetBearerToken(
                 out _,
-                out string token))
+                out _))
             {
                 return CrearError<
                     List<MiAsistenciaResponse>>(
-                    401,
-                    "No fue posible obtener un token de autorización válido.");
+                        401,
+                        "No fue posible obtener un token de autorización válido.");
             }
 
-            bool allowed =
-                await _abac.CheckAsync(
-                    ACTIVIDAD_GESTIONAR_RELEVO,
-                    token,
-                    ct);
+            #endregion
 
-            if (!allowed)
-            {
-                return CrearError<
-                    List<MiAsistenciaResponse>>(
-                    403,
-                    "No se tiene acceso a esta función");
-            }
+
+            #region USUARIO AUTENTICADO
 
             string? numeroUsuario =
                 ObtenerNumeroUsuario();
@@ -297,31 +290,38 @@ namespace CerberusBusinessService.Controllers
             {
                 return CrearError<
                     List<MiAsistenciaResponse>>(
-                    401,
-                    "No fue posible identificar al usuario autenticado.");
+                        401,
+                        "No fue posible identificar al usuario autenticado.");
             }
+
+            #endregion
+
 
             try
             {
+                #region OBTENER ASISTENCIAS
+
                 return await _asistenciasFunctions
                     .ObtenerMisAsistenciasAsync(
                         numeroUsuario,
                         ct);
+
+                #endregion
             }
             catch (OperationCanceledException)
             {
                 return CrearError<
                     List<MiAsistenciaResponse>>(
-                    408,
-                    "La consulta de asistencias fue cancelada.");
+                        408,
+                        "La consulta de asistencias fue cancelada.");
             }
             catch (Exception ex)
             {
                 return CrearError<
                     List<MiAsistenciaResponse>>(
-                    500,
-                    "Error al obtener las asistencias.",
-                    ex.Message);
+                        500,
+                        "Error al obtener las asistencias.",
+                        ex.Message);
             }
         }
 
