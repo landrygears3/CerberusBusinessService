@@ -10,8 +10,6 @@
 
         public long? ServicioSupervisorId { get; set; }
 
-        public long? ServicioOficinaEmpleadoId { get; set; }
-
         public string TipoOrigen { get; set; } =
             string.Empty;
 

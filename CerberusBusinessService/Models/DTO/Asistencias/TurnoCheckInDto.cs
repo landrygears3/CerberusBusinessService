@@ -11,8 +11,6 @@
 
         public long? ServicioSupervisorId { get; set; }
 
-        public long? ServicioOficinaEmpleadoId { get; set; }
-
         public DateTime FechaTurno { get; set; }
 
         public DateTime EntradaProgramada { get; set; }

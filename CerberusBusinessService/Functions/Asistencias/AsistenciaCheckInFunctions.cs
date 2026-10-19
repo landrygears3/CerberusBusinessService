@@ -1,6 +1,5 @@
 ﻿using CerberusBusinessService.Models.DTO;
 using CerberusBusinessService.Models.DTO.Asistencias;
-using CerberusBusinessService.Models.DTO.Oficinas;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
@@ -21,9 +20,6 @@ namespace CerberusBusinessService.Functions.Asistencias
 
         private const string ORIGEN_SUPERVISOR =
             "SUPERVISOR";
-
-        private const string ORIGEN_OFICINA =
-            "OFICINA";
 
         #endregion
 
@@ -169,18 +165,6 @@ namespace CerberusBusinessService.Functions.Asistencias
                         turnoSupervisor);
                 }
 
-                TurnoCheckInDto? turnoOficina =
-                    await ObtenerTurnoOficinaAsync(
-                        conn,
-                        empleado.EmpleadoId,
-                        fechaHoraActual,
-                        ct);
-
-                if (turnoOficina != null)
-                {
-                    turnos.Add(
-                        turnoOficina);
-                }
 
                 TurnoCheckInDto? turnoEmpleado =
                     await ObtenerTurnoEmpleadoAsync(
@@ -373,21 +357,10 @@ WHERE NumeroEmpleadoEntrante =
   AND Estatus <>
       @EstatusCancelada
 
-  AND
-  (
-      (
-          @ServicioSupervisorId IS NOT NULL
-          AND ServicioSupervisorId =
-              @ServicioSupervisorId
-      )
-      OR
-      (
-          @ServicioOficinaEmpleadoId IS NOT NULL
-          AND ServicioOficinaEmpleadoId =
-              @ServicioOficinaEmpleadoId
-      )
-  );";
+  AND @ServicioSupervisorId IS NOT NULL
 
+  AND ServicioSupervisorId =
+      @ServicioSupervisorId;";
                 int duplicado =
                     await conn.ExecuteScalarAsync<int>(
                         new CommandDefinition(
@@ -403,9 +376,7 @@ WHERE NumeroEmpleadoEntrante =
                                 EstatusCancelada =
                                     ESTATUS_CANCELADA,
 
-                                turno.ServicioSupervisorId,
-
-                                turno.ServicioOficinaEmpleadoId
+                                turno.ServicioSupervisorId
                             },
                             transaction,
                             cancellationToken: ct));
@@ -435,7 +406,6 @@ INSERT INTO dbo.Asistencia
     ServicioId,
     ServicioEmpleadoId,
     ServicioSupervisorId,
-    ServicioOficinaEmpleadoId,
     NumeroEmpleadoEntrante,
     NumeroEmpleadoSaliente,
     FechaTurno,
@@ -456,7 +426,6 @@ VALUES
     @ServicioId,
     NULL,
     @ServicioSupervisorId,
-    @ServicioOficinaEmpleadoId,
     @NumeroEmpleadoEntrante,
     NULL,
     @FechaTurno,
@@ -487,8 +456,6 @@ VALUES
                                 turno.ServicioId,
 
                                 turno.ServicioSupervisorId,
-
-                                turno.ServicioOficinaEmpleadoId,
 
                                 NumeroEmpleadoEntrante =
                                     numeroUsuario,
@@ -568,10 +535,7 @@ VALUES
                     "Check-In registrado correctamente.";
 
                 response.desc =
-                    turno.TipoOrigen ==
-                    ORIGEN_OFICINA
-                        ? "Check-In de oficina registrado correctamente."
-                        : "Check-In de supervisor registrado correctamente.";
+                    "Check-In de supervisor registrado correctamente.";
 
                 response.data =
                     new CheckInResponse
@@ -584,10 +548,6 @@ VALUES
 
                         ServicioSupervisorId =
                             turno.ServicioSupervisorId,
-
-                        ServicioOficinaEmpleadoId =
-                            turno.ServicioOficinaEmpleadoId,
-
                         ServicioId =
                             turno.ServicioId,
 
@@ -1042,173 +1002,6 @@ ORDER BY
                                 activo
                         });
                 }
-            }
-
-            return candidatos
-                .OrderByDescending(x =>
-                    x.EsActivo)
-                .ThenBy(x =>
-                    Math.Abs(
-                        (
-                            fechaHoraActual -
-                            x.EntradaProgramada
-                        ).TotalSeconds))
-                .FirstOrDefault();
-        }
-
-        #endregion
-
-        #region TURNO OFICINA
-
-        private async Task<TurnoCheckInDto?>
-            ObtenerTurnoOficinaAsync(
-                SqlConnection conn,
-                int empleadoId,
-                DateTime fechaHoraActual,
-                CancellationToken ct)
-        {
-            DateTime hoy =
-                fechaHoraActual.Date;
-
-            DateTime ayer =
-                hoy.AddDays(-1);
-
-            byte diaHoy =
-                ObtenerDiaSemana(
-                    hoy);
-
-            byte diaAyer =
-                ObtenerDiaSemana(
-                    ayer);
-
-            const string sql = @"
-SELECT
-    SOE.ServicioOficinaEmpleadoId,
-    SO.ServicioOficinaId,
-    SO.OficinaId,
-    SOE.EmpleadoId,
-    SOH.DiaSemana,
-    SOH.HoraEntrada,
-    SOH.HoraSalida,
-    SOH.SalidaDiaSiguiente
-
-FROM dbo.ServicioOficinaEmpleado SOE
-
-INNER JOIN dbo.ServicioOficina SO
-    ON SO.ServicioOficinaId =
-       SOE.ServicioOficinaId
-
-INNER JOIN dbo.Oficinas O
-    ON O.OficinaId =
-       SO.OficinaId
-
-INNER JOIN dbo.ServicioOficinaHorario SOH
-    ON SOH.ServicioOficinaId =
-       SO.ServicioOficinaId
-
-WHERE SOE.EmpleadoId =
-      @EmpleadoId
-
-  AND SOE.Estatus = 1
-  AND SO.Estatus = 1
-  AND O.Estatus = 1
-  AND SOH.Estatus = 1
-
-  AND SOH.DiaSemana IN
-  (
-      @DiaHoy,
-      @DiaAyer
-  );";
-
-            IEnumerable<ServicioOficinaCheckInDto>
-                asignaciones =
-                await conn.QueryAsync<
-                    ServicioOficinaCheckInDto>(
-                    new CommandDefinition(
-                        sql,
-                        new
-                        {
-                            EmpleadoId =
-                                empleadoId,
-
-                            DiaHoy =
-                                diaHoy,
-
-                            DiaAyer =
-                                diaAyer
-                        },
-                        cancellationToken: ct));
-
-            List<TurnoCheckInDto> candidatos =
-                new List<TurnoCheckInDto>();
-
-            foreach (
-                ServicioOficinaCheckInDto asignacion
-                in asignaciones)
-            {
-                DateTime fechaTurno =
-                    asignacion.DiaSemana == diaHoy
-                        ? hoy
-                        : ayer;
-
-                DateTime entrada =
-                    fechaTurno.Add(
-                        asignacion.HoraEntrada);
-
-                DateTime salida =
-                    fechaTurno.Add(
-                        asignacion.HoraSalida);
-
-                if (asignacion.SalidaDiaSiguiente)
-                {
-                    salida =
-                        salida.AddDays(1);
-                }
-
-                if (salida <= entrada)
-                {
-                    continue;
-                }
-
-                bool activo =
-                    fechaHoraActual >= entrada &&
-                    fechaHoraActual <= salida;
-
-                bool proximoHoy =
-                    fechaTurno == hoy &&
-                    entrada > fechaHoraActual;
-
-                if (!activo &&
-                    !proximoHoy)
-                {
-                    continue;
-                }
-
-                candidatos.Add(
-                    new TurnoCheckInDto
-                    {
-                        TipoOrigen =
-                            ORIGEN_OFICINA,
-
-                        ServicioId =
-                            null,
-
-                        ServicioOficinaEmpleadoId =
-                            asignacion
-                                .ServicioOficinaEmpleadoId,
-
-                        FechaTurno =
-                            fechaTurno,
-
-                        EntradaProgramada =
-                            entrada,
-
-                        SalidaProgramada =
-                            salida,
-
-                        EsActivo =
-                            activo
-                    });
             }
 
             return candidatos

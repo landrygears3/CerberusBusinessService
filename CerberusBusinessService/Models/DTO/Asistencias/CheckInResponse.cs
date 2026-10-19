@@ -8,7 +8,6 @@
 
         public long? ServicioSupervisorId { get; set; }
 
-        public long? ServicioOficinaEmpleadoId { get; set; }
 
         public int? ServicioId { get; set; }
 

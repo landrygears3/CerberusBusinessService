@@ -319,256 +319,6 @@ namespace CerberusBusinessService.Functions.Asistencias
         #endregion
 
 
-        #region CHECK-OUT DIRECTO
-
-        public async Task<ResponseModel<CheckOutResponse>>
-            ProcesarCheckOut(
-                string numeroUsuario,
-                bool esOficina,
-                CancellationToken ct)
-        {
-            ResponseModel<CheckOutResponse> response =
-                new ResponseModel<CheckOutResponse>();
-
-            SqlTransaction? transaction = null;
-
-            try
-            {
-                if (string.IsNullOrWhiteSpace(numeroUsuario))
-                {
-                    response.isSuccess = false;
-                    response.code = 401;
-                    response.message =
-                        "No fue posible identificar al empleado.";
-                    response.data = null;
-
-                    return response;
-                }
-
-                // ====================================================
-                // OFICINA
-                // ====================================================
-
-                if (!esOficina)
-                {
-                    response.isSuccess = false;
-                    response.code = 409;
-                    response.message =
-                        "El Check-Out de este empleado requiere el flujo de relevo.";
-                    response.desc =
-                        "El Check-Out directo únicamente aplica al rol Oficina.";
-                    response.data = null;
-
-                    return response;
-                }
-
-                using var conn =
-                    new SqlConnection(_csCerberus);
-
-                await conn.OpenAsync(ct);
-
-                DateTime fechaHoraActual =
-                    await ObtenerFechaServidorAsync(
-                        conn,
-                        ct);
-
-                transaction =
-                    conn.BeginTransaction();
-
-                // ====================================================
-                // BUSCAR ASISTENCIA ACTIVA
-                // ====================================================
-
-                const string sqlAsistencia = @"
-SELECT TOP (1)
-    AsistenciaId,
-    ServicioId,
-    ServicioEmpleadoId,
-    NumeroEmpleadoEntrante,
-    FechaTurno,
-    FechaHoraEntradaProgramada,
-    FechaHoraSalidaProgramada,
-    FechaHoraCheckIn,
-    Estatus
-FROM dbo.Asistencia WITH (UPDLOCK, HOLDLOCK)
-WHERE NumeroEmpleadoEntrante = @NumeroUsuario
-  AND Estatus = @EstatusEnTurno
-  AND FechaHoraCheckOut IS NULL
-ORDER BY
-    FechaHoraCheckIn DESC,
-    AsistenciaId DESC;";
-
-                AsistenciaActivaCheckOutDto? asistencia =
-                    await conn.QueryFirstOrDefaultAsync<
-                        AsistenciaActivaCheckOutDto>(
-                        new CommandDefinition(
-                            sqlAsistencia,
-                            new
-                            {
-                                NumeroUsuario =
-                                    numeroUsuario.Trim(),
-
-                                EstatusEnTurno =
-                                    ESTATUS_EN_TURNO
-                            },
-                            transaction,
-                            cancellationToken: ct));
-
-                if (asistencia == null)
-                {
-                    transaction.Rollback();
-                    transaction = null;
-
-                    response.isSuccess = false;
-                    response.code = 404;
-                    response.message =
-                        "El empleado no tiene una asistencia activa para realizar Check-Out.";
-                    response.data = null;
-
-                    return response;
-                }
-
-                // ====================================================
-                // CHECK-OUT DIRECTO
-                // ====================================================
-
-                const string sqlCheckOut = @"
-UPDATE dbo.Asistencia
-SET
-    FechaHoraCheckOut = @FechaHoraCheckOut,
-    Estatus = @EstatusFinalizada
-WHERE AsistenciaId = @AsistenciaId
-  AND Estatus = @EstatusEnTurno
-  AND FechaHoraCheckOut IS NULL;";
-
-                int rows =
-                    await conn.ExecuteAsync(
-                        new CommandDefinition(
-                            sqlCheckOut,
-                            new
-                            {
-                                FechaHoraCheckOut =
-                                    fechaHoraActual,
-
-                                EstatusFinalizada =
-                                    ESTATUS_FINALIZADA,
-
-                                asistencia.AsistenciaId,
-
-                                EstatusEnTurno =
-                                    ESTATUS_EN_TURNO
-                            },
-                            transaction,
-                            cancellationToken: ct));
-
-                if (rows != 1)
-                {
-                    transaction.Rollback();
-                    transaction = null;
-
-                    response.isSuccess = false;
-                    response.code = 409;
-                    response.message =
-                        "La asistencia cambió de estado antes de completar el Check-Out.";
-                    response.data = null;
-
-                    return response;
-                }
-
-                transaction.Commit();
-                transaction = null;
-
-                response.isSuccess = true;
-                response.code = 200;
-                response.message =
-                    "Check-Out registrado correctamente.";
-                response.desc =
-                    "El Check-Out se realizó directamente por pertenecer al rol Oficina.";
-
-                response.data =
-                    new CheckOutResponse
-                    {
-                        AsistenciaId =
-                            asistencia.AsistenciaId,
-
-                        ServicioId =
-                            asistencia.ServicioId,
-
-                        ServicioEmpleadoId =
-                            asistencia.ServicioEmpleadoId,
-
-                        NumeroEmpleado =
-                            numeroUsuario.Trim(),
-
-                        FechaTurno =
-                            asistencia.FechaTurno,
-
-                        FechaHoraEntradaProgramada =
-                            asistencia.FechaHoraEntradaProgramada,
-
-                        FechaHoraSalidaProgramada =
-                            asistencia.FechaHoraSalidaProgramada,
-
-                        FechaHoraCheckIn =
-                            asistencia.FechaHoraCheckIn,
-
-                        FechaHoraCheckOut =
-                            fechaHoraActual,
-
-                        Estatus =
-                            ESTATUS_FINALIZADA,
-
-                        EstatusDescripcion =
-                            "Finalizada"
-                    };
-
-                return response;
-            }
-            catch (SqlException ex)
-            {
-                try
-                {
-                    transaction?.Rollback();
-                }
-                catch
-                {
-                }
-
-                response.isSuccess = false;
-                response.code = 500;
-                response.message =
-                    "Error SQL al registrar el Check-Out.";
-                response.desc =
-                    ex.Message;
-                response.data = null;
-
-                return response;
-            }
-            catch (Exception ex)
-            {
-                try
-                {
-                    transaction?.Rollback();
-                }
-                catch
-                {
-                }
-
-                response.isSuccess = false;
-                response.code = 500;
-                response.message =
-                    "Error al registrar el Check-Out.";
-                response.desc =
-                    ex.Message;
-                response.data = null;
-
-                return response;
-            }
-        }
-
-        #endregion
-
-
         #region CHECK-IN APERTURA
 
         private async Task<ResponseModel<CheckInResponse>>
@@ -2723,6 +2473,7 @@ VALUES
 
         #endregion
 
+
         #region CHECK-OUT AUXILIARES
 
         private async Task FinalizarAsistenciaCheckOutAsync(
@@ -2922,6 +2673,7 @@ VALUES
         }
 
         #endregion
+
 
         #region R2
 
@@ -3309,7 +3061,6 @@ SELECT TOP (1)
     ServicioId,
     ServicioEmpleadoId,
     ServicioSupervisorId,
-    ServicioOficinaEmpleadoId,
     NumeroEmpleadoEntrante,
     FechaTurno,
     FechaHoraEntradaProgramada,
@@ -3334,7 +3085,6 @@ SELECT TOP (1)
     ServicioId,
     ServicioEmpleadoId,
     ServicioSupervisorId,
-    ServicioOficinaEmpleadoId,
     NumeroEmpleadoEntrante,
     FechaTurno,
     FechaHoraEntradaProgramada,
@@ -3471,142 +3221,6 @@ ORDER BY
                     fechaHoraActual <
                     asistencia.FechaHoraSalidaProgramada;
 
-                #region CHECK-OUT OFICINA
-
-                if (asistencia.ServicioOficinaEmpleadoId.HasValue)
-                {
-                    if (salidaAnticipada &&
-                        string.IsNullOrWhiteSpace(
-                            data.MotivoNoPermanencia))
-                    {
-                        response.isSuccess = false;
-                        response.code = 400;
-                        response.message =
-                            "El motivo de la salida anticipada es obligatorio.";
-                        response.data = null;
-
-                        return response;
-                    }
-
-                    SqlTransaction? transaction = null;
-
-                    try
-                    {
-                        transaction =
-                            conn.BeginTransaction();
-
-                        AsistenciaActivaCheckOutDto?
-                            asistenciaBloqueada =
-                                await ObtenerAsistenciaActivaCheckOutAsync(
-                                    conn,
-                                    numeroUsuario,
-                                    transaction,
-                                    ct);
-
-                        if (asistenciaBloqueada == null ||
-                            asistenciaBloqueada.AsistenciaId !=
-                            asistencia.AsistenciaId)
-                        {
-                            transaction.Rollback();
-                            transaction = null;
-
-                            response.isSuccess = false;
-                            response.code = 409;
-                            response.message =
-                                "La asistencia cambió antes de completar el Check-Out.";
-                            response.data = null;
-
-                            return response;
-                        }
-
-                        if (salidaAnticipada)
-                        {
-                            await RegistrarIncidenciaAbandonoTurnoAsync(
-                                conn,
-                                transaction,
-                                asistenciaBloqueada,
-                                numeroUsuario,
-                                data.MotivoNoPermanencia!,
-                                fechaHoraActual,
-                                ct);
-                        }
-
-                        await FinalizarAsistenciaCheckOutAsync(
-                            conn,
-                            transaction,
-                            asistenciaBloqueada.AsistenciaId,
-                            numeroUsuario,
-                            fechaHoraActual,
-                            ct);
-
-                        transaction.Commit();
-                        transaction = null;
-
-                        response.isSuccess = true;
-                        response.code = 200;
-
-                        response.message =
-                            "Check-Out registrado correctamente.";
-
-                        response.desc =
-                            salidaAnticipada
-                                ? "Se registró la salida anticipada y la incidencia de abandono de turno."
-                                : "El turno de oficina fue finalizado correctamente.";
-
-                        response.data =
-                            new CheckOutRelevoResponse
-                            {
-                                AsistenciaId =
-                                    asistenciaBloqueada.AsistenciaId,
-
-                                ServicioId =
-                                    asistenciaBloqueada.ServicioId,
-
-                                ServicioEmpleadoSalienteId =
-                                    null,
-
-                                ServicioEmpleadoAfectadoId =
-                                    null,
-
-                                SolicitudRelevoNoPlaneadoId =
-                                    null,
-
-                                RelevoNoPlaneadoAsignacionId =
-                                    null,
-
-                                PuedePermanecer =
-                                    false,
-
-                                CheckOutRealizado =
-                                    true,
-
-                                FechaHoraCheckOut =
-                                    fechaHoraActual,
-
-                                SolicitudEstatusClave =
-                                    null,
-
-                                AsignacionEstatusClave =
-                                    null
-                            };
-
-                        return response;
-                    }
-                    catch
-                    {
-                        try
-                        {
-                            transaction?.Rollback();
-                        }
-                        catch
-                        {
-                        }
-
-                        throw;
-                    }
-                }
-
-                #endregion
 
                 #region VALIDAR ASISTENCIA GUARDIA
 
@@ -4236,78 +3850,30 @@ SELECT
 
     A.ServicioSupervisorId,
 
-    A.ServicioOficinaEmpleadoId,
 
 
-    CASE
-        WHEN A.ServicioOficinaEmpleadoId IS NOT NULL
-            THEN 'OFICINA'
+CASE
+    WHEN A.ServicioSupervisorId IS NOT NULL
+        THEN 'SUPERVISOR'
 
-        WHEN A.ServicioSupervisorId IS NOT NULL
-            THEN 'SUPERVISOR'
+    WHEN A.ServicioEmpleadoId IS NOT NULL
+        THEN 'EMPLEADO'
 
-        WHEN A.ServicioEmpleadoId IS NOT NULL
-            THEN 'EMPLEADO'
-
-        ELSE 'DESCONOCIDO'
-    END AS TipoOrigen,
+    ELSE 'DESCONOCIDO'
+END AS TipoOrigen,
 
 
     A.FechaTurno AS Fecha,
 
 
-    CASE
-
-        /*
-         * ==========================================
-         * OFICINA
-         * ==========================================
-         */
-        WHEN A.ServicioOficinaEmpleadoId IS NOT NULL
-            THEN COALESCE
-            (
-                NULLIF(
-                    LTRIM(
-                        RTRIM(
-                            SO.NombreServicio
-                        )
-                    ),
-                    ''
-                ),
-
-                NULLIF(
-                    LTRIM(
-                        RTRIM(
-                            O.Nombre
-                        )
-                    ),
-                    ''
-                ),
-
-                'Oficina'
-            )
-
-
-        /*
-         * ==========================================
-         * EMPLEADO / SUPERVISOR
-         * ==========================================
-         */
-        ELSE COALESCE
-        (
-            NULLIF(
-                LTRIM(
-                    RTRIM(
-                        S.NombreServicio
-                    )
-                ),
-                ''
-            ),
-
-            'Servicio'
-        )
-
-    END AS Servicio,
+COALESCE
+(
+    NULLIF(
+        LTRIM(RTRIM(S.NombreServicio)),
+        ''
+    ),
+    'Servicio'
+) AS Servicio,
 
 
     /*
@@ -4408,25 +3974,6 @@ LEFT JOIN dbo.Servicio S
        A.ServicioId
 
 
-/*
- * ============================================================
- * OFICINA
- * ============================================================
- */
-
-LEFT JOIN dbo.ServicioOficinaEmpleado SOE
-    ON SOE.ServicioOficinaEmpleadoId =
-       A.ServicioOficinaEmpleadoId
-
-
-LEFT JOIN dbo.ServicioOficina SO
-    ON SO.ServicioOficinaId =
-       SOE.ServicioOficinaId
-
-
-LEFT JOIN dbo.Oficinas O
-    ON O.OficinaId =
-       SO.OficinaId
 
 
 /*
