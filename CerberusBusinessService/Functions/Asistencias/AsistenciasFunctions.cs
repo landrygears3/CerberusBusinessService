@@ -3061,6 +3061,7 @@ SELECT TOP (1)
     ServicioId,
     ServicioEmpleadoId,
     ServicioSupervisorId,
+    HorarioOficinaId,
     NumeroEmpleadoEntrante,
     FechaTurno,
     FechaHoraEntradaProgramada,
@@ -3071,9 +3072,7 @@ FROM dbo.Asistencia
 WHERE NumeroEmpleadoEntrante = @NumeroUsuario
   AND Estatus = @EstatusEnTurno
   AND FechaHoraCheckOut IS NULL
-ORDER BY
-    FechaHoraCheckIn DESC,
-    AsistenciaId DESC;";
+ORDER BY FechaHoraCheckIn DESC, AsistenciaId DESC;";
 
             #endregion
 
@@ -3085,6 +3084,7 @@ SELECT TOP (1)
     ServicioId,
     ServicioEmpleadoId,
     ServicioSupervisorId,
+    HorarioOficinaId,
     NumeroEmpleadoEntrante,
     FechaTurno,
     FechaHoraEntradaProgramada,
@@ -3095,30 +3095,21 @@ FROM dbo.Asistencia WITH (UPDLOCK, HOLDLOCK)
 WHERE NumeroEmpleadoEntrante = @NumeroUsuario
   AND Estatus = @EstatusEnTurno
   AND FechaHoraCheckOut IS NULL
-ORDER BY
-    FechaHoraCheckIn DESC,
-    AsistenciaId DESC;";
+ORDER BY FechaHoraCheckIn DESC, AsistenciaId DESC;";
 
             #endregion
 
             #region EJECUCION
 
-            string sql =
-                transaction == null
-                    ? sqlConsulta
-                    : sqlForUpdate;
+            string sql = transaction == null ? sqlConsulta : sqlForUpdate;
 
-            return await conn.QueryFirstOrDefaultAsync<
-                AsistenciaActivaCheckOutDto>(
+            return await conn.QueryFirstOrDefaultAsync<AsistenciaActivaCheckOutDto>(
                 new CommandDefinition(
                     sql,
                     new
                     {
-                        NumeroUsuario =
-                            numeroUsuario.Trim(),
-
-                        EstatusEnTurno =
-                            ESTATUS_EN_TURNO
+                        NumeroUsuario = numeroUsuario.Trim(),
+                        EstatusEnTurno = ESTATUS_EN_TURNO
                     },
                     transaction,
                     cancellationToken: ct));
@@ -3127,7 +3118,6 @@ ORDER BY
         }
 
         #endregion
-
 
         #region CHECK-OUT SIN RELEVO
 
@@ -3208,11 +3198,21 @@ ORDER BY
                 {
                     response.isSuccess = false;
                     response.code = 404;
-                    response.message =
-                        "El empleado no tiene una asistencia activa.";
+                    response.message = "El empleado no tiene una asistencia activa.";
                     response.data = null;
-
                     return response;
+                }
+
+                if (asistencia.HorarioOficinaId.HasValue)
+                {
+                    // Es el MISMO endpoint, pero oficina NO ejecuta relevos.
+                    // Este retorno ocurre ANTES de la validación de servicio,
+                    // fotografía, permanencia y creación de solicitudes.
+                    return await ProcesarCheckOutOficinaAsync(
+                        conn,
+                        numeroUsuario,
+                        data.MotivoNoPermanencia,
+                        ct);
                 }
 
                 #endregion
@@ -3843,186 +3843,71 @@ ORDER BY
                 const string sql = @"
 SELECT
     A.AsistenciaId,
-
     A.ServicioId,
-
     A.ServicioEmpleadoId,
-
     A.ServicioSupervisorId,
+    A.HorarioOficinaId,
 
-
-
-CASE
-    WHEN A.ServicioSupervisorId IS NOT NULL
-        THEN 'SUPERVISOR'
-
-    WHEN A.ServicioEmpleadoId IS NOT NULL
-        THEN 'EMPLEADO'
-
-    ELSE 'DESCONOCIDO'
-END AS TipoOrigen,
-
+    CASE
+        WHEN A.HorarioOficinaId IS NOT NULL THEN 'OFICINA'
+        WHEN A.ServicioSupervisorId IS NOT NULL THEN 'SUPERVISOR'
+        WHEN A.ServicioEmpleadoId IS NOT NULL THEN 'EMPLEADO'
+        ELSE 'DESCONOCIDO'
+    END AS TipoOrigen,
 
     A.FechaTurno AS Fecha,
 
+    CASE
+        WHEN A.HorarioOficinaId IS NOT NULL THEN 'Oficina central'
+        ELSE COALESCE(NULLIF(LTRIM(RTRIM(S.NombreServicio)), ''), 'Servicio')
+    END AS Servicio,
 
-COALESCE
-(
-    NULLIF(
-        LTRIM(RTRIM(S.NombreServicio)),
-        ''
-    ),
-    'Servicio'
-) AS Servicio,
-
-
-    /*
-     * El relevo únicamente tiene sentido
-     * para las asistencias normales de servicio.
-     *
-     * Supervisor y Oficina no manejan
-     * NumeroEmpleadoSaliente.
-     */
+    -- Solo los turnos de guardias tienen relevo saliente.
     CASE
         WHEN A.ServicioEmpleadoId IS NOT NULL
-            THEN NULLIF
+        THEN NULLIF
+        (
+            CONCAT_WS
             (
-                CONCAT_WS
-                (
-                    ' ',
-
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                R.Nombres
-                            )
-                        ),
-                        ''
-                    ),
-
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                R.ApellidoPaterno
-                            )
-                        ),
-                        ''
-                    ),
-
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                R.ApellidoMaterno
-                            )
-                        ),
-                        ''
-                    )
-                ),
-
-                ''
-            )
-
+                ' ',
+                NULLIF(LTRIM(RTRIM(R.Nombres)), ''),
+                NULLIF(LTRIM(RTRIM(R.ApellidoPaterno)), ''),
+                NULLIF(LTRIM(RTRIM(R.ApellidoMaterno)), '')
+            ),
+            ''
+        )
         ELSE NULL
     END AS Relevo,
 
-
     A.FechaHoraCheckIn AS CheckIn,
-
     A.FechaHoraCheckOut AS CheckOut,
 
-
     CASE
-        WHEN A.Estatus = 3
-            THEN 'AUTORIZANDO'
-
-        WHEN A.Estatus IN (1, 2)
-            THEN 'ASISTENCIA'
-
+        WHEN A.Estatus = 3 THEN 'AUTORIZANDO'
+        WHEN A.Estatus IN (1, 2) THEN 'ASISTENCIA'
         ELSE 'ASISTENCIA'
     END AS Estado,
 
-
     CASE
-        WHEN A.Estatus = 3
-            THEN 'Autorizando'
-
-        WHEN A.Estatus IN (1, 2)
-            THEN 'Asistencia'
-
+        WHEN A.Estatus = 3 THEN 'Autorizando'
+        WHEN A.Estatus IN (1, 2) THEN 'Asistencia'
         ELSE 'Asistencia'
     END AS EstadoDescripcion
 
-
 FROM dbo.Asistencia A
 
-
-/*
- * ============================================================
- * SERVICIO NORMAL / SUPERVISION
- * ============================================================
- *
- * IMPORTANTE:
- *
- * Antes era INNER JOIN.
- *
- * Eso provocaba que cualquier asistencia de oficina
- * desapareciera porque una asistencia de oficina
- * tiene ServicioId NULL.
- */
 LEFT JOIN dbo.Servicio S
-    ON S.ServicioId =
-       A.ServicioId
-
-
-
-
-/*
- * ============================================================
- * RELEVO
- * ============================================================
- */
+    ON S.ServicioId = A.ServicioId
 
 LEFT JOIN dbo.DatosGeneralesEmpleado R
-    ON LTRIM(
-           RTRIM(
-               R.UsuarioAsignado
-           )
-       ) =
-       LTRIM(
-           RTRIM(
-               A.NumeroEmpleadoSaliente
-           )
-       )
+    ON LTRIM(RTRIM(R.UsuarioAsignado)) =
+       LTRIM(RTRIM(A.NumeroEmpleadoSaliente))
 
-
-/*
- * ============================================================
- * USUARIO AUTENTICADO
- * ============================================================
- *
- * No importa de qué origen sea la asistencia:
- *
- * - EMPLEADO
- * - SUPERVISOR
- * - OFICINA
- *
- * Si NumeroEmpleadoEntrante corresponde al usuario
- * autenticado, la asistencia se devuelve.
- */
-
-WHERE LTRIM(
-          RTRIM(
-              A.NumeroEmpleadoEntrante
-          )
-      ) =
-      @NumeroUsuario
-
+WHERE LTRIM(RTRIM(A.NumeroEmpleadoEntrante)) = @NumeroUsuario
 
 ORDER BY
     A.FechaTurno DESC,
-
     A.FechaHoraCheckIn DESC,
-
     A.AsistenciaId DESC;";
 
                 #endregion
@@ -4115,6 +4000,7 @@ ORDER BY
         }
 
         #endregion
+
 
         #region HORARIO SALIDA ASISTENCIA
 
@@ -4297,6 +4183,129 @@ WHERE AsistenciaId = @AsistenciaId;";
                     null;
 
                 return response;
+            }
+        }
+
+        #endregion
+
+        #region CHECK-OUT OFICINA
+
+        private async Task<ResponseModel<CheckOutRelevoResponse>>
+            ProcesarCheckOutOficinaAsync(
+                SqlConnection conn,
+                string numeroUsuario,
+                string? motivoSalida,
+                CancellationToken ct)
+        {
+            var response = new ResponseModel<CheckOutRelevoResponse>();
+
+            using var transaction = conn.BeginTransaction(
+                System.Data.IsolationLevel.Serializable);
+
+            try
+            {
+                AsistenciaActivaCheckOutDto? asistencia =
+                    await ObtenerAsistenciaActivaCheckOutAsync(
+                        conn,
+                        numeroUsuario,
+                        transaction,
+                        ct);
+
+                if (asistencia == null)
+                {
+                    transaction.Rollback();
+                    response.isSuccess = false;
+                    response.code = 404;
+                    response.message = "El empleado no tiene una asistencia activa.";
+                    return response;
+                }
+
+                // Evita usar una asistencia de guardia/supervisor, aun si hubo
+                // un cambio concurrente desde la lectura previa.
+                if (!asistencia.HorarioOficinaId.HasValue ||
+                    asistencia.ServicioId.HasValue ||
+                    asistencia.ServicioEmpleadoId.HasValue ||
+                    asistencia.ServicioSupervisorId.HasValue)
+                {
+                    transaction.Rollback();
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message = "La asistencia activa no corresponde a oficina.";
+                    return response;
+                }
+
+                // IMPORTANTE: la consulta del reloj DEBE usar la transacción.
+                // No llamar aquí a ObtenerFechaServidorAsync(conn, ct), pues
+                // ese método no vincula su CommandDefinition a transaction.
+                DateTime fechaHoraActual = await conn.ExecuteScalarAsync<DateTime>(
+                    new CommandDefinition(
+                        "SELECT SYSDATETIME();",
+                        transaction: transaction,
+                        cancellationToken: ct));
+
+                bool salidaAnticipada =
+                    fechaHoraActual < asistencia.FechaHoraSalidaProgramada;
+
+                await FinalizarAsistenciaCheckOutAsync(
+                    conn,
+                    transaction,
+                    asistencia.AsistenciaId,
+                    numeroUsuario,
+                    fechaHoraActual,
+                    ct);
+
+                if (salidaAnticipada)
+                {
+                    string motivo = string.IsNullOrWhiteSpace(motivoSalida)
+                        ? "Salida anticipada de oficina"
+                        : motivoSalida.Trim();
+
+                    // Reutiliza el método existente: busca la incidencia por
+                    // clave ABANDONO_TURNO, evita duplicados por AsistenciaId y
+                    // permite ServicioId/AsignacionTurnoId NULL.
+                    await RegistrarIncidenciaAbandonoTurnoAsync(
+                        conn,
+                        transaction,
+                        asistencia,
+                        numeroUsuario,
+                        motivo,
+                        fechaHoraActual,
+                        ct);
+                }
+
+                transaction.Commit();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Check-Out registrado correctamente.";
+                response.desc = salidaAnticipada
+                    ? "Check-Out anticipado de oficina. Se registró ABANDONO_TURNO."
+                    : "Check-Out de oficina registrado correctamente.";
+
+                // Reutiliza el contrato actual del endpoint, SIN agregar
+                // propiedades relacionadas con oficina al DTO de relevos.
+                response.data = new CheckOutRelevoResponse
+                {
+                    AsistenciaId = asistencia.AsistenciaId,
+                    ServicioId = null,
+                    ServicioEmpleadoSalienteId = null,
+                    ServicioEmpleadoAfectadoId = null,
+                    SolicitudRelevoNoPlaneadoId = null,
+                    RelevoNoPlaneadoAsignacionId = null,
+                    PuedePermanecer = false,
+                    CheckOutRealizado = true,
+                    FechaHoraCheckOut = fechaHoraActual,
+                    SolicitudEstatusClave = null,
+                    AsignacionEstatusClave = null
+                };
+
+                return response;
+            }
+            catch
+            {
+                try { transaction.Rollback(); }
+                catch { /* Si la transacción ya finalizó. */ }
+                throw;
             }
         }
 

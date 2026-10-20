@@ -2,21 +2,14 @@
 {
     public class TurnoCheckInDto
     {
-        public string TipoOrigen { get; set; } =
-            string.Empty;
-
+        public string TipoOrigen { get; set; } = string.Empty;
         public int? ServicioId { get; set; }
-
         public long? ServicioEmpleadoId { get; set; }
-
         public long? ServicioSupervisorId { get; set; }
-
+        public long? HorarioOficinaId { get; set; }
         public DateTime FechaTurno { get; set; }
-
         public DateTime EntradaProgramada { get; set; }
-
         public DateTime SalidaProgramada { get; set; }
-
         public bool EsActivo { get; set; }
     }
 }

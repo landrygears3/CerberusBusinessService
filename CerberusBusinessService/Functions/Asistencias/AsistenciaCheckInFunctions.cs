@@ -10,16 +10,12 @@ namespace CerberusBusinessService.Functions.Asistencias
         #region CONSTANTES
 
         private const int MINUTOS_TOLERANCIA_RETARDO = 10;
-
         private const int ESTATUS_EN_TURNO = 1;
-
         private const int ESTATUS_CANCELADA = 4;
 
-        private const string ORIGEN_EMPLEADO =
-            "EMPLEADO";
-
-        private const string ORIGEN_SUPERVISOR =
-            "SUPERVISOR";
+        private const string ORIGEN_EMPLEADO = "EMPLEADO";
+        private const string ORIGEN_SUPERVISOR = "SUPERVISOR";
+        private const string ORIGEN_OFICINA = "OFICINA";
 
         #endregion
 
@@ -149,8 +145,7 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                 #region OBTENER TURNOS CANDIDATOS
 
-                List<TurnoCheckInDto> turnos =
-                    new List<TurnoCheckInDto>();
+                List<TurnoCheckInDto> turnos = new List<TurnoCheckInDto>();
 
                 TurnoCheckInDto? turnoSupervisor =
                     await ObtenerTurnoSupervisorAsync(
@@ -161,10 +156,8 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                 if (turnoSupervisor != null)
                 {
-                    turnos.Add(
-                        turnoSupervisor);
+                    turnos.Add(turnoSupervisor);
                 }
-
 
                 TurnoCheckInDto? turnoEmpleado =
                     await ObtenerTurnoEmpleadoAsync(
@@ -175,8 +168,30 @@ namespace CerberusBusinessService.Functions.Asistencias
 
                 if (turnoEmpleado != null)
                 {
-                    turnos.Add(
-                        turnoEmpleado);
+                    turnos.Add(turnoEmpleado);
+                }
+
+                TurnoCheckInDto? turnoOficina =
+                    await ObtenerTurnoOficinaAsync(
+                        conn,
+                        numeroUsuario.Trim(),
+                        fechaHoraActual,
+                        ct);
+
+                if (turnoOficina != null)
+                {
+                    if (turnoEmpleado != null || turnoSupervisor != null)
+                    {
+                        response.isSuccess = false;
+                        response.code = 409;
+                        response.message =
+                            "El empleado tiene un horario de oficina y una asignación operativa incompatibles.";
+                        response.desc = null;
+                        response.data = null;
+                        return response;
+                    }
+
+                    turnos.Add(turnoOficina);
                 }
 
                 #endregion
@@ -270,14 +285,28 @@ namespace CerberusBusinessService.Functions.Asistencias
                     ORIGEN_EMPLEADO,
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    return await _asistenciasFunctions
-                        .ProcesarCheckIn(
-                            data,
-                            numeroUsuario,
-                            authorization,
-                            ct);
+                    return await _asistenciasFunctions.ProcesarCheckIn(
+                        data,
+                        numeroUsuario,
+                        authorization,
+                        ct);
                 }
 
+                if (string.Equals(
+                    turnoSeleccionado.TipoOrigen,
+                    ORIGEN_OFICINA,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return await ProcesarCheckInOficinaAsync(
+                        conn,
+                        data,
+                        turnoSeleccionado,
+                        numeroUsuario.Trim(),
+                        fechaHoraActual,
+                        ct);
+                }
+
+                // Sin modificaciones en el flujo de supervisores.
                 return await ProcesarCheckInSimpleAsync(
                     conn,
                     data,
@@ -1293,6 +1322,379 @@ VALUES
                 fechaHoraActual,
                 true,
                 minutosRetardo);
+        }
+
+        #endregion
+
+        #region TURNO OFICINA
+
+        private async Task<TurnoCheckInDto?> ObtenerTurnoOficinaAsync(
+            SqlConnection conn,
+            string numeroUsuario,
+            DateTime fechaHoraActual,
+            CancellationToken ct)
+        {
+            DateTime hoy = fechaHoraActual.Date;
+            DateTime ayer = hoy.AddDays(-1);
+
+            byte diaHoy = ObtenerDiaSemana(hoy);
+            byte diaAyer = ObtenerDiaSemana(ayer);
+
+            const string sql = @"
+SELECT
+    HorarioOficinaId,
+    UsuarioAsignado,
+    DiaSemana,
+    HoraInicio,
+    HoraFin,
+    CruzaDia,
+    FechaInicioVigencia,
+    FechaFinVigencia
+FROM dbo.HorariosOficina
+WHERE UsuarioAsignado = @NumeroUsuario
+  AND Estatus = 1
+  AND DiaSemana IN (@DiaHoy, @DiaAyer)
+  AND FechaInicioVigencia <= @Hoy
+  AND (FechaFinVigencia IS NULL OR FechaFinVigencia >= @Ayer);";
+
+            IEnumerable<HorarioOficinaCheckInDto> horarios =
+                await conn.QueryAsync<HorarioOficinaCheckInDto>(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            NumeroUsuario = numeroUsuario,
+                            DiaHoy = diaHoy,
+                            DiaAyer = diaAyer,
+                            Hoy = hoy,
+                            Ayer = ayer
+                        },
+                        cancellationToken: ct));
+
+            var candidatos = new List<TurnoCheckInDto>();
+
+            foreach (HorarioOficinaCheckInDto horario in horarios)
+            {
+                foreach (DateTime fecha in new[] { ayer, hoy })
+                {
+                    if (ObtenerDiaSemana(fecha) != horario.DiaSemana)
+                        continue;
+
+                    if (fecha < horario.FechaInicioVigencia.Date)
+                        continue;
+
+                    if (horario.FechaFinVigencia.HasValue &&
+                        fecha > horario.FechaFinVigencia.Value.Date)
+                        continue;
+
+                    DateTime entrada = fecha.Add(horario.HoraInicio);
+                    DateTime salida = fecha.Add(horario.HoraFin);
+
+                    if (horario.CruzaDia)
+                        salida = salida.AddDays(1);
+
+                    if (salida <= entrada)
+                        continue;
+
+                    bool activo =
+                        fechaHoraActual >= entrada &&
+                        fechaHoraActual <= salida;
+
+                    bool proximoHoy =
+                        fecha == hoy &&
+                        entrada > fechaHoraActual;
+
+                    if (!activo && !proximoHoy)
+                        continue;
+
+                    candidatos.Add(new TurnoCheckInDto
+                    {
+                        TipoOrigen = ORIGEN_OFICINA,
+                        HorarioOficinaId = horario.HorarioOficinaId,
+                        ServicioId = null,
+                        ServicioEmpleadoId = null,
+                        ServicioSupervisorId = null,
+                        FechaTurno = fecha,
+                        EntradaProgramada = entrada,
+                        SalidaProgramada = salida,
+                        EsActivo = activo
+                    });
+                }
+            }
+
+            return candidatos
+                .OrderByDescending(x => x.EsActivo)
+                .ThenBy(x => Math.Abs(
+                    (fechaHoraActual - x.EntradaProgramada).TotalSeconds))
+                .FirstOrDefault();
+        }
+
+        #endregion
+
+        #region CHECK-IN OFICINA
+
+        private async Task<ResponseModel<CheckInResponse>> ProcesarCheckInOficinaAsync(
+            SqlConnection conn,
+            CheckInRequest data,
+            TurnoCheckInDto turno,
+            string numeroUsuario,
+            DateTime fechaHoraActual,
+            CancellationToken ct)
+        {
+            var response = new ResponseModel<CheckInResponse>();
+
+            if (!turno.HorarioOficinaId.HasValue ||
+                turno.ServicioId.HasValue ||
+                turno.ServicioEmpleadoId.HasValue ||
+                turno.ServicioSupervisorId.HasValue)
+            {
+                response.isSuccess = false;
+                response.code = 409;
+                response.message = "El turno no corresponde a personal de oficina.";
+                return response;
+            }
+
+            // Se reutiliza el cálculo y tolerancia actuales, pero oficina
+            // guarda la hora REAL de entrada, incluso si llega anticipadamente.
+            var controlHora = CalcularHoraCheckIn(
+                turno.EntradaProgramada,
+                fechaHoraActual);
+
+            using var transaction = conn.BeginTransaction(
+                System.Data.IsolationLevel.Serializable);
+
+            try
+            {
+                // Revalidación transaccional: el horario debe seguir vigente.
+                const string sqlHorario = @"
+SELECT COUNT(1)
+FROM dbo.HorariosOficina WITH (UPDLOCK, HOLDLOCK)
+WHERE HorarioOficinaId = @HorarioOficinaId
+  AND UsuarioAsignado = @NumeroUsuario
+  AND DiaSemana = @DiaSemana
+  AND Estatus = 1
+  AND FechaInicioVigencia <= @FechaTurno
+  AND (FechaFinVigencia IS NULL OR FechaFinVigencia >= @FechaTurno);";
+
+                int horarioValido = await conn.ExecuteScalarAsync<int>(
+                    new CommandDefinition(
+                        sqlHorario,
+                        new
+                        {
+                            turno.HorarioOficinaId,
+                            NumeroUsuario = numeroUsuario,
+                            DiaSemana = ObtenerDiaSemana(turno.FechaTurno),
+                            FechaTurno = turno.FechaTurno.Date
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+                if (horarioValido != 1)
+                {
+                    transaction.Rollback();
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message = "El horario de oficina ya no está vigente.";
+                    return response;
+                }
+
+                // Incompatibilidad por fecha con servicio de guardia/supervisor.
+                // ID se utiliza SOLO para consultar las asignaciones operativas;
+                // la relación de oficina sigue siendo por UsuarioAsignado.
+                const string sqlConflicto = @"
+SELECT COUNT(1)
+FROM dbo.DatosGeneralesEmpleado E
+WHERE LTRIM(RTRIM(E.UsuarioAsignado)) = @NumeroUsuario
+  AND
+  (
+      EXISTS
+      (
+          SELECT 1
+          FROM dbo.ServicioEmpleado SE WITH (UPDLOCK, HOLDLOCK)
+          WHERE SE.EmpleadoId = E.ID
+            AND SE.FechaInicio <= @FechaTurno
+            AND (SE.FechaFin IS NULL OR SE.FechaFin >= @FechaTurno)
+      )
+      OR EXISTS
+      (
+          SELECT 1
+          FROM dbo.ServicioSupervisor SS WITH (UPDLOCK, HOLDLOCK)
+          WHERE SS.SupervisorEmpleadoId = E.ID
+            AND SS.FechaInicio <= @FechaTurno
+            AND (SS.FechaFin IS NULL OR SS.FechaFin >= @FechaTurno)
+      )
+  );";
+
+                int conflicto = await conn.ExecuteScalarAsync<int>(
+                    new CommandDefinition(
+                        sqlConflicto,
+                        new
+                        {
+                            NumeroUsuario = numeroUsuario,
+                            FechaTurno = turno.FechaTurno.Date
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+                if (conflicto != 0)
+                {
+                    transaction.Rollback();
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "El empleado tiene una asignación vigente como guardia o supervisor.";
+                    return response;
+                }
+
+                // Bloquea duplicados por día (aunque cambie el horario) y
+                // una segunda entrada mientras exista una asistencia abierta.
+                const string sqlDuplicado = @"
+SELECT COUNT(1)
+FROM dbo.Asistencia WITH (UPDLOCK, HOLDLOCK)
+WHERE NumeroEmpleadoEntrante = @NumeroUsuario
+  AND Estatus <> @EstatusCancelada
+  AND
+  (
+      (HorarioOficinaId IS NOT NULL AND FechaTurno = @FechaTurno)
+      OR (Estatus = @EstatusEnTurno AND FechaHoraCheckOut IS NULL)
+  );";
+
+                int duplicados = await conn.ExecuteScalarAsync<int>(
+                    new CommandDefinition(
+                        sqlDuplicado,
+                        new
+                        {
+                            NumeroUsuario = numeroUsuario,
+                            FechaTurno = turno.FechaTurno.Date,
+                            EstatusCancelada = ESTATUS_CANCELADA,
+                            EstatusEnTurno = ESTATUS_EN_TURNO
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+                if (duplicados != 0)
+                {
+                    transaction.Rollback();
+                    response.isSuccess = false;
+                    response.code = 409;
+                    response.message =
+                        "Ya existe una asistencia de oficina para el día o una asistencia activa.";
+                    return response;
+                }
+
+                const string sqlInsert = @"
+INSERT INTO dbo.Asistencia
+(
+    ServicioId,
+    ServicioEmpleadoId,
+    ServicioSupervisorId,
+    HorarioOficinaId,
+    NumeroEmpleadoEntrante,
+    NumeroEmpleadoSaliente,
+    FechaTurno,
+    FechaHoraEntradaProgramada,
+    FechaHoraSalidaProgramada,
+    FechaHoraCheckIn,
+    FechaHoraCheckOut,
+    EsRetardo,
+    MinutosRetardo,
+    Geolocalizacion,
+    Estatus,
+    FechaRegistro,
+    UsuarioRegistro
+)
+OUTPUT INSERTED.AsistenciaId
+VALUES
+(
+    NULL,
+    NULL,
+    NULL,
+    @HorarioOficinaId,
+    @NumeroUsuario,
+    NULL,
+    @FechaTurno,
+    @EntradaProgramada,
+    @SalidaProgramada,
+    @FechaHoraActual,
+    NULL,
+    @EsRetardo,
+    @MinutosRetardo,
+    geography::Point(@Latitud, @Longitud, 4326),
+    @EstatusEnTurno,
+    @FechaHoraActual,
+    @NumeroUsuario
+);";
+
+                long asistenciaId = await conn.ExecuteScalarAsync<long>(
+                    new CommandDefinition(
+                        sqlInsert,
+                        new
+                        {
+                            turno.HorarioOficinaId,
+                            NumeroUsuario = numeroUsuario,
+                            FechaTurno = turno.FechaTurno.Date,
+                            EntradaProgramada = turno.EntradaProgramada,
+                            SalidaProgramada = turno.SalidaProgramada,
+                            FechaHoraActual = fechaHoraActual,
+                            controlHora.EsRetardo,
+                            controlHora.MinutosRetardo,
+                            Latitud = data.Latitud!.Value,
+                            Longitud = data.Longitud!.Value,
+                            EstatusEnTurno = ESTATUS_EN_TURNO
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+                long? incidenciaRetardoId = null;
+
+                if (controlHora.EsRetardo &&
+                    controlHora.MinutosRetardo.HasValue)
+                {
+                    incidenciaRetardoId = await RegistrarIncidenciaRetardoAsync(
+                        conn,
+                        transaction,
+                        asistenciaId,
+                        null, // Oficina no tiene ServicioId.
+                        numeroUsuario,
+                        fechaHoraActual,
+                        controlHora.MinutosRetardo.Value,
+                        ct);
+                }
+
+                transaction.Commit();
+
+                response.isSuccess = true;
+                response.code = 200;
+                response.message = "Check-In registrado correctamente.";
+                response.desc = "Check-In de oficina registrado correctamente.";
+                response.data = new CheckInResponse
+                {
+                    AsistenciaId = asistenciaId,
+                    ServicioEmpleadoId = null,
+                    ServicioSupervisorId = null,
+                    HorarioOficinaId = turno.HorarioOficinaId,
+                    ServicioId = null,
+                    NumeroEmpleadoEntrante = numeroUsuario,
+                    NumeroEmpleadoSaliente = null,
+                    FechaTurno = turno.FechaTurno.Date,
+                    FechaHoraEntradaProgramada = turno.EntradaProgramada,
+                    FechaHoraSalidaProgramada = turno.SalidaProgramada,
+                    FechaHoraCheckIn = fechaHoraActual,
+                    EsRetardo = controlHora.EsRetardo,
+                    MinutosRetardo = controlHora.MinutosRetardo,
+                    IncidenciaRetardoId = incidenciaRetardoId,
+                    Estatus = ESTATUS_EN_TURNO,
+                    EstatusDescripcion = "En turno"
+                };
+
+                return response;
+            }
+            catch
+            {
+                try { transaction.Rollback(); }
+                catch { /* Si ya se confirmó o perdió la transacción. */ }
+                throw;
+            }
         }
 
         #endregion
