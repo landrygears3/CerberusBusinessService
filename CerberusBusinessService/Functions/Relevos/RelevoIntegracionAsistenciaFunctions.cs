@@ -184,6 +184,8 @@ WHERE AsistenciaId = @AsistenciaId
             string numeroUsuario,
             CancellationToken ct)
         {
+            #region OBTENER FECHAS Y HORARIOS
+
             DateTime fechaTurno =
                 solicitud.FechaHoraInicioCobertura.Date;
 
@@ -197,12 +199,42 @@ WHERE AsistenciaId = @AsistenciaId
                 solicitud.FechaHoraFinCobertura.Date >
                 solicitud.FechaHoraInicioCobertura.Date;
 
+            #endregion
+
+            #region VALIDAR EXCLUSIVIDAD OFICINA
+
+            string? errorExclusividad =
+                await CerberusBusinessService.Functions.Asistencias
+                    .ExclusividadOficinaFunctions
+                    .ValidarAsignacionOperativaAsync(
+                        conn,
+                        transaction,
+                        empleadoAsignado.EmpleadoId,
+                        solicitud.FechaHoraInicioCobertura.Date,
+                        solicitud.FechaHoraFinCobertura.Date,
+                        ct);
+
+            if (errorExclusividad != null)
+            {
+                throw new InvalidOperationException(
+                    "EXCLUSIVIDAD_OFICINA: " +
+                    errorExclusividad);
+            }
+
+            #endregion
+
+            #region OBSERVACIONES
+
             string observaciones =
                 asignacionAfectada != null
                     ? $"Relevo no planeado por falta. Solicitud: " +
                       $"{solicitud.SolicitudRelevoNoPlaneadoId}."
                     : $"Cobertura no planeada sin turno siguiente asignado. Solicitud: " +
                       $"{solicitud.SolicitudRelevoNoPlaneadoId}.";
+
+            #endregion
+
+            #region INSERTAR SERVICIO EMPLEADO TEMPORAL
 
             const string sql = @"
 INSERT INTO dbo.ServicioEmpleado
@@ -237,49 +269,54 @@ VALUES
     @UsuarioAlta
 );";
 
-            return await conn.ExecuteScalarAsync<long>(
-                new CommandDefinition(
-                    sql,
-                    new
-                    {
-                        ServicioId =
-                            servicioContexto.ServicioId,
+            long servicioEmpleadoId =
+                await conn.ExecuteScalarAsync<long>(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            ServicioId =
+                                servicioContexto.ServicioId,
 
-                        EmpleadoId =
-                            empleadoAsignado.EmpleadoId,
+                            EmpleadoId =
+                                empleadoAsignado.EmpleadoId,
 
-                        TipoAsignacionServicioId =
-                            tipoAsignacionServicioId,
+                            TipoAsignacionServicioId =
+                                tipoAsignacionServicioId,
 
-                        EmpleadoCubiertoId =
-                            asignacionAfectada?.EmpleadoId,
+                            EmpleadoCubiertoId =
+                                asignacionAfectada?.EmpleadoId,
 
-                        FechaInicio =
-                            fechaTurno,
+                            FechaInicio =
+                                fechaTurno,
 
-                        FechaFin =
-                            fechaTurno,
+                            FechaFin =
+                                fechaTurno,
 
-                        HoraEntrada =
-                            horaEntrada,
+                            HoraEntrada =
+                                horaEntrada,
 
-                        HoraSalida =
-                            horaSalida,
+                            HoraSalida =
+                                horaSalida,
 
-                        SalidaDiaSiguiente =
-                            salidaDiaSiguiente,
+                            SalidaDiaSiguiente =
+                                salidaDiaSiguiente,
 
-                        Observaciones =
-                            observaciones,
+                            Observaciones =
+                                observaciones,
 
-                        FechaAlta =
-                            fechaActual,
+                            FechaAlta =
+                                fechaActual,
 
-                        UsuarioAlta =
-                            numeroUsuario
-                    },
-                    transaction,
-                    cancellationToken: ct));
+                            UsuarioAlta =
+                                numeroUsuario
+                        },
+                        transaction,
+                        cancellationToken: ct));
+
+            return servicioEmpleadoId;
+
+            #endregion
         }
 
         #endregion

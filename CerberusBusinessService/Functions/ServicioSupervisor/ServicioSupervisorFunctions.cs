@@ -2,6 +2,7 @@
 using CerberusBusinessService.Models.DTO.ServicioSupervisor;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using CerberusBusinessService.Functions.Asistencias;
 
 namespace CerberusBusinessService.Functions.ServicioSupervisor
 {
@@ -308,8 +309,7 @@ ORDER BY
                 return response;
             }
 
-            if (string.IsNullOrWhiteSpace(
-                numeroUsuario))
+            if (string.IsNullOrWhiteSpace(numeroUsuario))
             {
                 response.isSuccess = false;
                 response.code = 401;
@@ -321,37 +321,30 @@ ORDER BY
             }
 
             string? errorRequest =
-                ValidarRequestAsignacion(
-                    request);
+                ValidarRequestAsignacion(request);
 
             if (errorRequest != null)
             {
                 response.isSuccess = false;
                 response.code = 400;
-                response.message =
-                    errorRequest;
+                response.message = errorRequest;
                 response.data = null;
 
                 return response;
             }
 
-            SqlTransaction? transaction =
-                null;
+            SqlTransaction? transaction = null;
 
             try
             {
                 using var conn =
-                    new SqlConnection(
-                        _csCerberus);
+                    new SqlConnection(_csCerberus);
 
                 await conn.OpenAsync(ct);
 
-                transaction =
-                    conn.BeginTransaction();
+                transaction = conn.BeginTransaction();
 
-                // ================================================
-                // SERVICIO
-                // ================================================
+                #region VALIDAR SERVICIO
 
                 const string sqlServicio = @"
 SELECT COUNT(1)
@@ -384,14 +377,13 @@ WHERE ServicioId = @ServicioId;";
                     return response;
                 }
 
-                // ================================================
-                // SUPERVISORES
-                // ================================================
+                #endregion
+
+                #region VALIDAR SUPERVISORES
 
                 int[] supervisoresId =
                     request.Supervisores
-                        .Select(x =>
-                            x.SupervisorEmpleadoId)
+                        .Select(x => x.SupervisorEmpleadoId)
                         .Distinct()
                         .ToArray();
 
@@ -406,14 +398,12 @@ WHERE ID IN @SupervisoresId;";
                             sqlSupervisores,
                             new
                             {
-                                SupervisoresId =
-                                    supervisoresId
+                                SupervisoresId = supervisoresId
                             },
                             transaction,
                             cancellationToken: ct));
 
-                if (supervisoresExistentes !=
-                    supervisoresId.Length)
+                if (supervisoresExistentes != supervisoresId.Length)
                 {
                     transaction.Rollback();
                     transaction = null;
@@ -427,24 +417,20 @@ WHERE ID IN @SupervisoresId;";
                     return response;
                 }
 
-                // ================================================
-                // VIGENCIA
-                // ================================================
+                #endregion
+
+                #region VALIDAR VIGENCIA
 
                 DateTime fechaInicio =
-                    request.Supervisores[0]
-                        .FechaInicio.Date;
+                    request.Supervisores[0].FechaInicio.Date;
 
                 DateTime? fechaFin =
-                    request.Supervisores[0]
-                        .FechaFin?.Date;
+                    request.Supervisores[0].FechaFin?.Date;
 
                 bool diferenteVigencia =
                     request.Supervisores.Any(x =>
-                        x.FechaInicio.Date !=
-                            fechaInicio ||
-                        x.FechaFin?.Date !=
-                            fechaFin);
+                        x.FechaInicio.Date != fechaInicio ||
+                        x.FechaFin?.Date != fechaFin);
 
                 if (diferenteVigencia)
                 {
@@ -455,19 +441,53 @@ WHERE ID IN @SupervisoresId;";
                     response.code = 400;
                     response.message =
                         "Todos los turnos enviados deben tener la misma vigencia.";
+
                     response.desc =
                         "FechaInicio y FechaFin deben ser iguales para todos los supervisores de la distribución.";
+
                     response.data = null;
 
                     return response;
                 }
 
-                // ================================================
-                // ASIGNACIONES YA EXISTENTES
-                //
-                // Ya NO se rechazan simplemente por existir.
-                // Se cargan para validar el bloque acumulado.
-                // ================================================
+                #endregion
+
+                #region VALIDAR EXCLUSIVIDAD OFICINA
+
+                foreach (
+                    AsignacionServicioSupervisorRequest supervisor
+                    in request.Supervisores.OrderBy(x => x.SupervisorEmpleadoId))
+                {
+                    string? errorExclusividad =
+                        await CerberusBusinessService.Functions.Asistencias
+                            .ExclusividadOficinaFunctions
+                            .ValidarAsignacionOperativaAsync(
+                                conn,
+                                transaction,
+                                supervisor.SupervisorEmpleadoId,
+                                supervisor.FechaInicio.Date,
+                                supervisor.FechaFin?.Date,
+                                ct);
+
+                    if (errorExclusividad != null)
+                    {
+                        transaction.Rollback();
+                        transaction = null;
+
+                        response.isSuccess = false;
+                        response.code = 409;
+                        response.message =
+                            "El supervisor no puede recibir esta asignación.";
+                        response.desc = errorExclusividad;
+                        response.data = null;
+
+                        return response;
+                    }
+                }
+
+                #endregion
+
+                #region OBTENER ASIGNACIONES EXISTENTES
 
                 const string sqlAsignacionesExistentes = @"
 SELECT
@@ -504,18 +524,16 @@ ORDER BY
                                 new
                                 {
                                     request.ServicioId,
-                                    FechaInicio =
-                                        fechaInicio,
-                                    FechaFin =
-                                        fechaFin
+                                    FechaInicio = fechaInicio,
+                                    FechaFin = fechaFin
                                 },
                                 transaction,
                                 cancellationToken: ct))
                     ).ToList();
 
-                // ================================================
-                // HORARIOS DEL SERVICIO
-                // ================================================
+                #endregion
+
+                #region OBTENER HORARIOS DEL SERVICIO
 
                 const string sqlHorarios = @"
 SELECT
@@ -536,15 +554,13 @@ WHERE ServicioId = @ServicioId
   AND
   (
       FechaFinVigencia IS NULL
-      OR FechaFinVigencia >=
-         @FechaInicio
+      OR FechaFinVigencia >= @FechaInicio
   )
 ORDER BY
     DiaSemana,
     FechaInicioVigencia DESC;";
 
-                List<ServicioHorarioSupervisorDto>
-                    horarios =
+                List<ServicioHorarioSupervisorDto> horarios =
                     (
                         await conn.QueryAsync<
                             ServicioHorarioSupervisorDto>(
@@ -553,10 +569,8 @@ ORDER BY
                                 new
                                 {
                                     request.ServicioId,
-                                    FechaInicio =
-                                        fechaInicio,
-                                    FechaFin =
-                                        fechaFin
+                                    FechaInicio = fechaInicio,
+                                    FechaFin = fechaFin
                                 },
                                 transaction,
                                 cancellationToken: ct))
@@ -576,12 +590,9 @@ ORDER BY
                     return response;
                 }
 
-                // ================================================
-                // FECHAS A VALIDAR
-                //
-                // Se valida el patrón semanal y también cualquier
-                // cambio de vigencia de asignaciones existentes.
-                // ================================================
+                #endregion
+
+                #region VALIDAR COBERTURA
 
                 List<DateTime> fechasValidacion =
                     ObtenerFechasValidacion(
@@ -590,24 +601,19 @@ ORDER BY
                         asignacionesExistentes,
                         horarios);
 
-                foreach (DateTime fecha
-                    in fechasValidacion)
+                foreach (DateTime fecha in fechasValidacion)
                 {
                     byte diaSemana =
-                        ObtenerDiaSemana(
-                            fecha);
+                        ObtenerDiaSemana(fecha);
 
                     ServicioHorarioSupervisorDto? horario =
                         horarios
                             .Where(x =>
-                                x.DiaSemana ==
-                                    diaSemana &&
-                                x.FechaInicioVigencia.Date <=
-                                    fecha.Date &&
+                                x.DiaSemana == diaSemana &&
+                                x.FechaInicioVigencia.Date <= fecha.Date &&
                                 (
                                     !x.FechaFinVigencia.HasValue ||
-                                    x.FechaFinVigencia.Value.Date >=
-                                        fecha.Date
+                                    x.FechaFinVigencia.Value.Date >= fecha.Date
                                 ))
                             .OrderByDescending(x =>
                                 x.FechaInicioVigencia)
@@ -622,8 +628,10 @@ ORDER BY
                         response.code = 409;
                         response.message =
                             "La asignación contiene días fuera del horario de operación del servicio.";
+
                         response.desc =
                             $"El servicio no tiene horario operativo para {fecha:yyyy-MM-dd}.";
+
                         response.data = null;
 
                         return response;
@@ -633,12 +641,10 @@ ORDER BY
                         existentesDelDia =
                         asignacionesExistentes
                             .Where(x =>
-                                x.FechaInicio.Date <=
-                                    fecha.Date &&
+                                x.FechaInicio.Date <= fecha.Date &&
                                 (
                                     !x.FechaFin.HasValue ||
-                                    x.FechaFin.Value.Date >=
-                                        fecha.Date
+                                    x.FechaFin.Value.Date >= fecha.Date
                                 ))
                             .ToList();
 
@@ -646,12 +652,10 @@ ORDER BY
                         nuevosDelDia =
                         request.Supervisores
                             .Where(x =>
-                                x.FechaInicio.Date <=
-                                    fecha.Date &&
+                                x.FechaInicio.Date <= fecha.Date &&
                                 (
                                     !x.FechaFin.HasValue ||
-                                    x.FechaFin.Value.Date >=
-                                        fecha.Date
+                                    x.FechaFin.Value.Date >= fecha.Date
                                 ))
                             .ToList();
 
@@ -674,17 +678,19 @@ ORDER BY
                         response.code = 409;
                         response.message =
                             "La distribución de supervisores no es válida.";
+
                         response.desc =
                             $"{fecha:yyyy-MM-dd}: {errorCobertura}";
+
                         response.data = null;
 
                         return response;
                     }
                 }
 
-                // ================================================
-                // INSERT
-                // ================================================
+                #endregion
+
+                #region INSERTAR SUPERVISORES
 
                 const string sqlInsert = @"
 INSERT INTO dbo.ServicioSupervisor
@@ -711,8 +717,7 @@ VALUES
 );";
 
                 foreach (
-                    AsignacionServicioSupervisorRequest
-                    supervisor
+                    AsignacionServicioSupervisorRequest supervisor
                     in request.Supervisores)
                 {
                     await conn.ExecuteAsync(
@@ -722,25 +727,19 @@ VALUES
                             {
                                 request.ServicioId,
 
-                                supervisor
-                                    .SupervisorEmpleadoId,
+                                supervisor.SupervisorEmpleadoId,
 
                                 FechaInicio =
-                                    supervisor
-                                        .FechaInicio.Date,
+                                    supervisor.FechaInicio.Date,
 
                                 FechaFin =
-                                    supervisor
-                                        .FechaFin?.Date,
+                                    supervisor.FechaFin?.Date,
 
-                                supervisor
-                                    .HoraEntrada,
+                                supervisor.HoraEntrada,
 
-                                supervisor
-                                    .HoraSalida,
+                                supervisor.HoraSalida,
 
-                                supervisor
-                                    .SalidaDiaSiguiente,
+                                supervisor.SalidaDiaSiguiente,
 
                                 UsuarioAlta =
                                     numeroUsuario.Trim()
@@ -749,26 +748,37 @@ VALUES
                             cancellationToken: ct));
                 }
 
+                #endregion
+
+                #region COMMIT
+
                 transaction.Commit();
                 transaction = null;
 
+                #endregion
+
+                #region RESPONSE
+
                 response.isSuccess = true;
                 response.code = 200;
+
                 response.message =
                     "Supervisores asignados correctamente al servicio.";
+
                 response.desc = null;
 
                 response.data =
                     new AsignarServiciosSupervisorResponse
                     {
-                        ServicioId =
-                            request.ServicioId,
+                        ServicioId = request.ServicioId,
 
                         AsignacionesInsertadas =
                             request.Supervisores.Count
                     };
 
                 return response;
+
+                #endregion
             }
             catch (SqlException ex)
             {
@@ -784,8 +794,7 @@ VALUES
                 response.code = 500;
                 response.message =
                     "Error SQL al asignar supervisores al servicio.";
-                response.desc =
-                    ex.Message;
+                response.desc = ex.Message;
                 response.data = null;
 
                 return response;
@@ -804,8 +813,7 @@ VALUES
                 response.code = 500;
                 response.message =
                     "Error al asignar supervisores al servicio.";
-                response.desc =
-                    ex.Message;
+                response.desc = ex.Message;
                 response.data = null;
 
                 return response;
@@ -813,7 +821,6 @@ VALUES
         }
 
         #endregion
-
         #region VALIDACIONES
 
         private string? ValidarRequestAsignacion(
